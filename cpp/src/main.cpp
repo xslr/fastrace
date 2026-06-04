@@ -1,7 +1,10 @@
 #include <chrono>
 #include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <format>
 #include <fstream>
@@ -11,7 +14,7 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-#include <zlib.h>
+#include <libdeflate.h>
 #include <spdlog/spdlog.h>
 
 #pragma pack(push, 1)
@@ -90,8 +93,20 @@ enum BLFObjectType : uint32_t {
 
 bool dumpObjContents = false;
 
+// ---------------------------------------------------------------------------
+// Per-run timing accumulators – populated by nextLogObject, printed by main.
+// ---------------------------------------------------------------------------
+struct PerfCounters {
+  uint64_t containers      = 0;
+  uint64_t compressedBytes = 0;
+  uint64_t decompressedBytes = 0;
+  int64_t  inflateNs       = 0;   // total ns spent inside inflate()
+  int64_t  parseNs         = 0;   // total ns spent outside inflate()
+};
+static PerfCounters g_perf;
 
-std::string to_hex(char* buf, size_t len) {
+
+std::string to_hex(const char* buf, size_t len) {
   std::string result;
   result.reserve(len * 2);
   for (size_t i = 0; i < len; i++) {
@@ -101,7 +116,7 @@ std::string to_hex(char* buf, size_t len) {
 }
 
 std::string to_hex(uint32_t num) {
-  return to_hex(reinterpret_cast<char*>(&num), 4);
+  return to_hex(reinterpret_cast<const char*>(&num), 4);
 }
 
 
@@ -109,16 +124,120 @@ constexpr uint32_t BLF_LOGG_SIGNATURE = 0x47474f4c;  // "LOGG"
 constexpr uint32_t BLF_LOBJ_SIGNATURE = 0x4a424f4c;  // "LOBJ"
 
 
-std::optional<BlfObject> nextLogObject(std::istream &file, BlfFileHeader &fileHdr) {
-  BlfObject obj;
-  bool haveHeader;
+// ---------------------------------------------------------------------------
+// Cursor – lightweight read-cursor over a contiguous memory region.
+// All reads are bounds-checked; no heap allocations, no syscalls.
+// ---------------------------------------------------------------------------
+struct Cursor {
+    const char* base;    // start of mapped region
+    const char* end;     // one-past-end of mapped region
+    const char* pos;     // current read position
 
-  while (!file.eof()) {
-    size_t pos = file.tellg();
+    bool   eof()       const noexcept { return pos >= end; }
+    size_t tell()      const noexcept { return static_cast<size_t>(pos - base); }
+    size_t remaining() const noexcept { return static_cast<size_t>(end - pos); }
+
+    // Copy n bytes into dst and advance.  Returns false if not enough data.
+    bool read(void* dst, size_t n) noexcept {
+        if (pos + n > end) return false;
+        std::memcpy(dst, pos, n);
+        pos += n;
+        return true;
+    }
+
+    // Return a direct pointer into the mapped region and advance (zero-copy).
+    // Returns nullptr if not enough data remains.
+    const char* peek(size_t n) noexcept {
+        if (pos + n > end) return nullptr;
+        const char* p = pos;
+        pos += n;
+        return p;
+    }
+
+    // Skip n bytes without reading them.
+    bool skip(size_t n) noexcept {
+        if (pos + n > end) return false;
+        pos += n;
+        return true;
+    }
+};
+
+
+// ---------------------------------------------------------------------------
+// MappedFile – RAII wrapper around mmap.  The file descriptor is closed
+// immediately after mmap() so callers need no separate fd management.
+// ---------------------------------------------------------------------------
+struct MappedFile {
+    void*  addr = MAP_FAILED;
+    size_t size = 0;
+
+    MappedFile() = default;
+    ~MappedFile() {
+        if (addr != MAP_FAILED) munmap(addr, size);
+    }
+    // Non-copyable
+    MappedFile(const MappedFile&) = delete;
+    MappedFile& operator=(const MappedFile&) = delete;
+
+    // Open path and map it read-only.  Returns false on any error.
+    bool open(const std::string& path) {
+        int fd = ::open(path.c_str(), O_RDONLY);
+        if (fd < 0) {
+            spdlog::error("Could not open file {}", path);
+            return false;
+        }
+        struct stat st{};
+        if (fstat(fd, &st) != 0) {
+            spdlog::error("fstat failed for {}", path);
+            close(fd);
+            return false;
+        }
+        size = static_cast<size_t>(st.st_size);
+        addr = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+        close(fd);  // fd can be closed immediately after mmap()
+        if (addr == MAP_FAILED) {
+            spdlog::error("mmap failed for {}", path);
+            return false;
+        }
+        // Hint the kernel to prefetch pages ahead sequentially
+        madvise(addr, size, MADV_SEQUENTIAL);
+        return true;
+    }
+
+    // Return a Cursor positioned at the start of the mapping.
+    Cursor cursor() const noexcept {
+        const char* b = static_cast<const char*>(addr);
+        return Cursor{b, b + size, b};
+    }
+};
+
+
+// ---------------------------------------------------------------------------
+// nextLogObject – parse the next LOBJ from the cursor.
+//
+// decompBuf:    caller-owned buffer reused across calls; grown on demand.
+// decompressor: caller-owned libdeflate decompressor allocated once and reused
+//               across all objects — libdeflate has no per-call state mutation.
+// skipDecompress: when true, skip decompression entirely (used to isolate
+//               whether decompression is the bottleneck).
+// ---------------------------------------------------------------------------
+std::optional<BlfObject> nextLogObject(Cursor& cursor, BlfFileHeader& fileHdr,
+                                       std::vector<char>& decompBuf,
+                                       libdeflate_decompressor* decompressor,
+                                       bool skipDecompress) {
+  using Clock = std::chrono::steady_clock;
+
+  BlfObject obj;
+  bool haveHeader = false;
+
+  auto parseT0 = Clock::now();
+
+  while (!cursor.eof()) {
+    size_t pos = cursor.tell();
     spdlog::debug("nextLogObject() @{} (0x{:x})", pos, pos);
 
     // find start of next "LOBJ". it may not necessarily be 4 byte aligned
-    file.read(reinterpret_cast<char*>(&obj.baseHeader.signature), 4);
+    if (!cursor.read(&obj.baseHeader.signature, 4)) break;
     spdlog::debug("SIG=0x{:x} read=0x{:x}", BLF_LOBJ_SIGNATURE, obj.baseHeader.signature);
     if (obj.baseHeader.signature == BLF_LOBJ_SIGNATURE) {
       spdlog::debug("Found \"LOBJ\" header");
@@ -127,7 +246,7 @@ std::optional<BlfObject> nextLogObject(std::istream &file, BlfFileHeader &fileHd
     } else if ((obj.baseHeader.signature >> 8) == (BLF_LOBJ_SIGNATURE & 0x00FFFFFF)) {
       spdlog::debug("misalign 1");
       obj.baseHeader.signature = obj.baseHeader.signature >> 8;
-      file.read(reinterpret_cast<char*>(&obj.baseHeader.signature) + 3, 1);
+      if (!cursor.read(reinterpret_cast<char*>(&obj.baseHeader.signature) + 3, 1)) break;
       spdlog::debug("CATCHUP read=0x{:x}", obj.baseHeader.signature);
       if (obj.baseHeader.signature == BLF_LOBJ_SIGNATURE) {
         spdlog::debug("signature (0x{:x}) matches LOBJ", obj.baseHeader.signature);
@@ -141,7 +260,7 @@ std::optional<BlfObject> nextLogObject(std::istream &file, BlfFileHeader &fileHd
     } else if ((obj.baseHeader.signature >> 16) == (BLF_LOBJ_SIGNATURE & 0x0000FFFF)) {
       spdlog::debug("misalign 2");
       obj.baseHeader.signature = obj.baseHeader.signature >> 16;
-      file.read(reinterpret_cast<char*>(&obj.baseHeader.signature) + 2, 2);
+      if (!cursor.read(reinterpret_cast<char*>(&obj.baseHeader.signature) + 2, 2)) break;
       spdlog::debug("CATCHUP read=0x{:x}", obj.baseHeader.signature);
       if (obj.baseHeader.signature == BLF_LOBJ_SIGNATURE) {
         spdlog::debug("signature (0x{:x}) matches LOBJ", obj.baseHeader.signature);
@@ -155,7 +274,7 @@ std::optional<BlfObject> nextLogObject(std::istream &file, BlfFileHeader &fileHd
     } else if ((obj.baseHeader.signature >> 24) == (BLF_LOBJ_SIGNATURE & 0x000000FF)) {
       spdlog::debug("misalign 3");
       obj.baseHeader.signature = obj.baseHeader.signature >> 24;
-      file.read(reinterpret_cast<char*>(&obj.baseHeader.signature) + 1, 3);
+      if (!cursor.read(reinterpret_cast<char*>(&obj.baseHeader.signature) + 1, 3)) break;
       spdlog::debug("CATCHUP read=0x{:x}", obj.baseHeader.signature);
       if (obj.baseHeader.signature == BLF_LOBJ_SIGNATURE) {
         spdlog::debug("signature (0x{:x}) matches LOBJ", obj.baseHeader.signature);
@@ -182,93 +301,93 @@ std::optional<BlfObject> nextLogObject(std::istream &file, BlfFileHeader &fileHd
   }
 
   if (haveHeader) {
-    file.read(reinterpret_cast<char*>(&obj.baseHeader) + 4, sizeof(BlfObjectHeaderBase) - 4);
+    cursor.read(reinterpret_cast<char*>(&obj.baseHeader) + 4, sizeof(BlfObjectHeaderBase) - 4);
     spdlog::debug("headerSize: {}", obj.baseHeader.headerSize);
     spdlog::debug("headerVersion: {}", obj.baseHeader.headerVersion);
     spdlog::debug("objectSize: {} (0x{:x})", obj.baseHeader.objectSize, obj.baseHeader.objectSize);
     spdlog::debug("objectType: {} (0x{:x})", obj.baseHeader.objectType, obj.baseHeader.objectType);
   }
-
-  #if 0
-  file.read(reinterpret_cast<char*>(&obj.baseHeader), sizeof(BlfObjectHeaderBase));
-  if (std::string(obj.baseHeader.signature, 4) != "LOBJ") {
-    // If we don't find LOBJ, we might be out of sync or at the end
-    // TODO: handle out of sync streams. seek to start of next LOBJ
-
-    spdlog::warn("Missing LOBJ signature. Instead of \"LOBJ\", found: {}", to_hex(obj.baseHeader.signature, sizeof(obj.baseHeader.signature)));
-  } else {
-    spdlog::debug("Found a \"LOBJ\" header");
-    spdlog::debug("headerSize: {}", obj.baseHeader.headerSize);
-    spdlog::debug("headerVersion: {}", obj.baseHeader.headerVersion);
-    spdlog::debug("objectSize: {} (0x{:x})", obj.baseHeader.objectSize, obj.baseHeader.objectSize);
-    spdlog::debug("objectType: {} (0x{:x})", obj.baseHeader.objectType, obj.baseHeader.objectType);
-  }
-  #endif
 
   // TODO: handoff to object handler
 
-
   if (obj.baseHeader.objectType == CONTAINER) {
     spdlog::debug("found a CONTAINER object");
-  
 
-  BlfObjectHeader objHeader2;
-  file.read(reinterpret_cast<char*>(&objHeader2), sizeof(BlfObjectHeaderBase));
-  spdlog::debug("objHeader2.flags: {} 0x{:04x}", objHeader2.flags, objHeader2.flags);
-  spdlog::debug("objHeader2.staticSize: {}", objHeader2.staticSize);
-  spdlog::debug("objHeader2.version: {}", objHeader2.version);
-  spdlog::debug("objHeader2.timestamp: {} 0x{:08x}", objHeader2.timestamp, objHeader2.timestamp);
+    BlfObjectHeader objHeader2;
+    cursor.read(reinterpret_cast<char*>(&objHeader2), sizeof(BlfObjectHeaderBase));
+    spdlog::debug("objHeader2.flags: {} 0x{:04x}", objHeader2.flags, objHeader2.flags);
+    spdlog::debug("objHeader2.staticSize: {}", objHeader2.staticSize);
+    spdlog::debug("objHeader2.version: {}", objHeader2.version);
+    spdlog::debug("objHeader2.timestamp: {} 0x{:08x}", objHeader2.timestamp, objHeader2.timestamp);
 
-  std::vector<char> compressed(obj.baseHeader.objectSize - obj.baseHeader.headerSize - sizeof(BlfObjectHeader));
-  std::vector<char> decompressed(compressed.size()*5);
+    const size_t compressedSize =
+        obj.baseHeader.objectSize - obj.baseHeader.headerSize - sizeof(BlfObjectHeader);
 
-  file.read(compressed.data(), obj.baseHeader.objectSize - obj.baseHeader.headerSize - sizeof(BlfObjectHeader));
+    // Zero-copy: point directly into the mapped region rather than copying
+    // the compressed bytes into a separate heap buffer.
+    const char* compressedData = cursor.peek(compressedSize);
 
-  // size_t currentPos = file.tellg();
-  // spdlog::debug("Current position: {} 0x{:x}", currentPos, currentPos);
-  
-  // TODO
-  // - seek to 4 byte alignment
-  // - load all objects
-  // - decode zlib
-  z_stream zs{};
+    g_perf.containers++;
+    g_perf.compressedBytes += compressedSize;
 
-  zs.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(compressed.data()));
-  zs.avail_in = compressed.size();
-  zs.next_out = reinterpret_cast<Bytef*>(decompressed.data());
+    if (!skipDecompress) {
+      // --- timed libdeflate_zlib_decompress() ---
+      // libdeflate operates on the whole input buffer at once — a perfect
+      // match for our mmap'd data.  No streaming state, no per-call alloc.
+      // Retry with a larger buffer on the rare INSUFFICIENT_SPACE result.
+      g_perf.parseNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          Clock::now() - parseT0).count();
 
-  zs.avail_out = decompressed.size();
+      auto inflateT0 = Clock::now();
 
-  if (inflateInit(&zs) != Z_OK) {
-    spdlog::error("inflateInit fail");
-  }
-  int ret = inflate(&zs, Z_FINISH);
+      // Start at 5× compressed size; double on each INSUFFICIENT_SPACE retry.
+      if (decompBuf.size() < compressedSize * 5) decompBuf.resize(compressedSize * 5);
 
-  inflateEnd(&zs);
+      size_t actualOut = 0;
+      libdeflate_result res;
+      do {
+        res = libdeflate_zlib_decompress(
+            decompressor,
+            compressedData, compressedSize,
+            decompBuf.data(), decompBuf.size(),
+            &actualOut);
+        if (res == LIBDEFLATE_INSUFFICIENT_SPACE) {
+          decompBuf.resize(decompBuf.size() * 2);
+          spdlog::warn("decompBuf too small, doubled to {} bytes", decompBuf.size());
+        }
+      } while (res == LIBDEFLATE_INSUFFICIENT_SPACE);
 
-  if (ret == Z_STREAM_END) {
-    spdlog::debug("zlib decode successful");
+      g_perf.inflateNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+          Clock::now() - inflateT0).count();
+      parseT0 = Clock::now();
 
-    if (true == dumpObjContents) {
-      for (int i=0; i<0x6000; i++) {
-        spdlog::trace("{:02x} ", decompressed[i]);
+      if (res == LIBDEFLATE_SUCCESS) {
+        g_perf.decompressedBytes += actualOut;
+        spdlog::debug("libdeflate decode successful ({} bytes)", actualOut);
+
+        if (true == dumpObjContents) {
+          for (int i=0; i<0x6000; i++) {
+            spdlog::trace("{:02x} ", decompBuf[i]);
+          }
+        }
+      } else {
+        spdlog::error("libdeflate_zlib_decompress failed ({})", static_cast<int>(res));
       }
     }
   }
-  }
+
+  g_perf.parseNs += std::chrono::duration_cast<std::chrono::nanoseconds>(
+      Clock::now() - parseT0).count();
 
   return obj;
 }
 
 
-// Read and validate the BLF file header ("LOGG" block) from an already-open
-// stream. On success the stream is positioned just past the header padding,
+// Read and validate the BLF file header ("LOGG" block) from the cursor.
+// On success the cursor is positioned just past the header padding,
 // ready for the first LOBJ. Returns nullopt on any error.
-std::optional<BlfFileHeader> readFileHeader(std::istream& file) {
-  // check minimum size
-  file.seekg(0, std::ios::end);
-  const auto fileSize = static_cast<size_t>(file.tellg());
-  file.seekg(0, std::ios::beg);
+std::optional<BlfFileHeader> readFileHeader(Cursor& cursor) {
+  const size_t fileSize = static_cast<size_t>(cursor.end - cursor.base);
 
   if (fileSize < sizeof(BlfFileHeader)) {
     spdlog::error("File is too short ({} bytes). stop", fileSize);
@@ -277,8 +396,7 @@ std::optional<BlfFileHeader> readFileHeader(std::istream& file) {
 
   // read the fixed-size header struct
   BlfFileHeader hdr;
-  file.read(reinterpret_cast<char*>(&hdr), sizeof(BlfFileHeader));
-  if (!file) {
+  if (!cursor.read(&hdr, sizeof(BlfFileHeader))) {
     spdlog::error("Failed to read file header");
     return std::nullopt;
   }
@@ -303,50 +421,50 @@ std::optional<BlfFileHeader> readFileHeader(std::istream& file) {
   // consume any padding bytes between the fixed struct and the first LOBJ
   const size_t padSize = hdr.headerSize - sizeof(BlfFileHeader);
   if (padSize > 0) {
-    std::vector<std::byte> pad(padSize);
-    file.read(reinterpret_cast<char*>(pad.data()), padSize);
-    spdlog::debug("File header pad: {}", to_hex(reinterpret_cast<char*>(pad.data()), padSize));
+    const char* pad = cursor.peek(padSize);
+    if (pad) {
+      spdlog::debug("File header pad: {}", to_hex(pad, padSize));
+    }
   }
 
   return hdr;
 }
 
-void processFile(const std::string& filename) {
-  std::ifstream file(filename, std::ios::binary);
-  if (!file.is_open()) {
-    spdlog::error("Could not open file {}", filename);
+void processFile(const std::string& filename, bool skipDecompress) {
+  MappedFile mf;
+  if (!mf.open(filename)) return;  // errors already logged inside open()
+
+  spdlog::info("Processing file: {} ({} bytes)", filename, mf.size);
+
+  Cursor cursor = mf.cursor();
+
+  auto fileHeader = readFileHeader(cursor);
+  if (!fileHeader) return;  // error already logged inside readFileHeader()
+
+  // Pre-allocate a reusable decompression buffer.  It is grown on demand
+  // (doubling semantics from std::vector::resize) but never shrunk, so
+  // the allocator is called at most O(log(max_object_size)) times total.
+  std::vector<char> decompBuf(1 * 1024 * 1024);  // 1 MiB initial capacity
+
+  // Allocate one libdeflate decompressor and reuse it across every CONTAINER
+  // object.  libdeflate has no mutable per-call state — no Reset() needed.
+  libdeflate_decompressor* decompressor = libdeflate_alloc_decompressor();
+  if (!decompressor) {
+    spdlog::error("libdeflate_alloc_decompressor failed");
     return;
   }
 
-  const auto fileSize = [&] {
-    file.seekg(0, std::ios::end);
-    auto sz = static_cast<size_t>(file.tellg());
-    file.seekg(0, std::ios::beg);
-    return sz;
-  }();
-  spdlog::info("Processing file: {} ({} bytes)", filename, fileSize);
-
-  auto fileHeader = readFileHeader(file);
-  if (!fileHeader) {
-    return;  // error already logged inside readFileHeader
-  }
-
-  // stream is now positioned at the first LOBJ
-  while (!file.eof()) {
+  // cursor is now positioned at the first LOBJ
+  while (!cursor.eof()) {
     // get log container
-    auto obj = nextLogObject(file, *fileHeader);
-    if (!obj) {
-      return;
-    }
+    auto obj = nextLogObject(cursor, *fileHeader, decompBuf, decompressor, skipDecompress);
+    if (!obj) break;
 
-    // TODO:process log container
+    // TODO: process log container
   }
-  // [LOBJ|HS|HV|OSIZ|OTYP]
-  // 4b    2b 2b 4b   4b
-  // @0x90 LOBJ
-  //  @0x98 sizeof LOBJ = 0x6b22
-  // 0x6bb4 LOBJ
-  //  @6bbc sizeof LOBJ =  0x71f2
+
+  libdeflate_free_decompressor(decompressor);
+  // MappedFile destructor calls munmap() automatically
 }
 
 void benchmarkRawRead(const std::string& filename) {
@@ -404,8 +522,8 @@ void dropFileCache(const std::string& filename) {
 }
 
 int main(int argc, char* argv[]) {
-  if (argc != 2) {
-    spdlog::error("Usage: {} <filename>", argv[0]);
+  if (argc < 2) {
+    spdlog::error("Usage: {} <filename> [--no-decompress]", argv[0]);
     return 1;
   }
 
@@ -413,6 +531,11 @@ int main(int argc, char* argv[]) {
   spdlog::set_level(spdlog::level::info);
 
   std::string filename = argv[1];
+  bool skipDecompress = (argc >= 3 && std::string(argv[2]) == "--no-decompress");
+
+  if (skipDecompress) {
+    spdlog::info("*** --no-decompress mode: inflate() will be skipped ***");
+  }
 
   // get file size for speed calculations
   std::ifstream sizeProbe(filename, std::ios::binary | std::ios::ate);
@@ -424,7 +547,7 @@ int main(int argc, char* argv[]) {
   dropFileCache(filename);
 
   auto procStart = std::chrono::high_resolution_clock::now();
-  processFile(filename);
+  processFile(filename, skipDecompress);
   auto procEnd = std::chrono::high_resolution_clock::now();
 
   const double proc_s = std::chrono::duration<double>(procEnd - procStart).count();
@@ -433,10 +556,27 @@ int main(int argc, char* argv[]) {
   dropFileCache(filename);
   benchmarkRawRead(filename);
 
-  // --- summary (printed last so it doesn't scroll away) ---
+  // --- timing breakdown ---
+  const double inflate_s = static_cast<double>(g_perf.inflateNs) * 1e-9;
+  const double parse_s   = static_cast<double>(g_perf.parseNs)   * 1e-9;
+  const double compMiB   = static_cast<double>(g_perf.compressedBytes)   / (1024.0 * 1024.0);
+  const double decompMiB = static_cast<double>(g_perf.decompressedBytes) / (1024.0 * 1024.0);
+
   spdlog::info("--- BLF processing ---");
-  spdlog::info("processFile took {:.3f} ms", proc_s * 1000.0);
-  spdlog::info("Avg processing speed: {:.2f} MiB/s", megabytes / proc_s);
+  spdlog::info("processFile took    {:.3f} ms", proc_s * 1000.0);
+  spdlog::info("Avg processing speed: {:.2f} MiB/s (compressed throughput)", megabytes / proc_s);
+  spdlog::info("--- Timing breakdown ---");
+  spdlog::info("  Containers processed : {}", g_perf.containers);
+  spdlog::info("  Compressed in        : {:.2f} MiB", compMiB);
+  spdlog::info("  Decompressed out     : {:.2f} MiB", decompMiB);
+  if (!skipDecompress) {
+    spdlog::info("  inflate() time       : {:.3f} ms  ({:.1f}% of total)",
+                 inflate_s * 1000.0, 100.0 * inflate_s / proc_s);
+    spdlog::info("  inflate() throughput : {:.2f} MiB/s (compressed in)",
+                 compMiB / inflate_s);
+    spdlog::info("  parse/other time     : {:.3f} ms  ({:.1f}% of total)",
+                 parse_s * 1000.0, 100.0 * parse_s / proc_s);
+  }
 
   return 0;
 }

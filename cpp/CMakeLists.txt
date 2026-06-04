@@ -26,8 +26,9 @@ add_executable(cpp_parser src/main.cpp)
 # Libraries
 # find_package(libpqxx REQUIRED)
 # target_link_libraries(cpp_parser PRIVATE libpqxx::pqxx)
-find_package(ZLIB)
-target_link_libraries(cpp_parser PRIVATE ZLIB::ZLIB spdlog::spdlog)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(libdeflate REQUIRED IMPORTED_TARGET libdeflate)
+target_link_libraries(cpp_parser PRIVATE PkgConfig::libdeflate spdlog::spdlog)
 
 # CLI11 (assuming it's available or we provide it in include/)
 # For now, just setup the structure.
