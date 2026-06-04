@@ -5,7 +5,16 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Find dependencies
+# Dependencies
+include(FetchContent)
+
+FetchContent_Declare(
+  spdlog
+  GIT_REPOSITORY https://github.com/gabime/spdlog.git
+  GIT_TAG        v1.15.3
+)
+FetchContent_MakeAvailable(spdlog)
+
 # Note: For prototype, assuming libraries are installed system-wide or via package manager.
 # CLI11 is header-only. libpqxx is for PostgreSQL.
 # Include directories
@@ -18,7 +27,7 @@ add_executable(cpp_parser src/main.cpp)
 # find_package(libpqxx REQUIRED)
 # target_link_libraries(cpp_parser PRIVATE libpqxx::pqxx)
 find_package(ZLIB)
-target_link_libraries(cpp_parser PRIVATE ZLIB::ZLIB)
+target_link_libraries(cpp_parser PRIVATE ZLIB::ZLIB spdlog::spdlog)
 
 # CLI11 (assuming it's available or we provide it in include/)
 # For now, just setup the structure.
