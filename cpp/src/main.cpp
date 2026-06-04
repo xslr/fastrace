@@ -1,4 +1,6 @@
 #include <chrono>
+#include <fcntl.h>
+#include <unistd.h>
 #include <cstdio>
 #include <ctime>
 #include <format>
@@ -332,6 +334,60 @@ void processFile(const std::string& filename) {
   std::cout << std::endl;
 }
 
+void benchmarkRawRead(const std::string& filename) {
+  std::ifstream file(filename, std::ios::binary | std::ios::ate);
+  if (!file.is_open()) {
+    std::cerr << "Error: Could not open file " << filename << " for raw read benchmark" << std::endl;
+    return;
+  }
+
+  const size_t fileSize = file.tellg();
+  file.seekg(0, std::ios::beg);
+
+  constexpr size_t kBufSize = 1024 * 1024;  // 1 MiB chunks
+  std::vector<char> buf(kBufSize);
+
+  auto start = std::chrono::high_resolution_clock::now();
+  while (file.read(buf.data(), kBufSize) || file.gcount() > 0) {
+    // intentionally empty – just drain the file as fast as possible
+    if (file.gcount() == 0) break;
+  }
+  auto end = std::chrono::high_resolution_clock::now();
+
+  const double seconds = std::chrono::duration<double>(end - start).count();
+  const double megabytes = static_cast<double>(fileSize) / (1024.0 * 1024.0);
+
+  std::cout << std::format("\n--- Raw read benchmark ---\n");
+  std::cout << std::format("File size : {:.2f} MiB\n", megabytes);
+  std::cout << std::format("Read time : {:.3f} ms\n", seconds * 1000.0);
+  std::cout << std::format("Throughput: {:.2f} MiB/s\n", megabytes / seconds);
+}
+
+// Evict a single file from the Linux page cache using posix_fadvise.
+// Does not require root (unlike /proc/sys/vm/drop_caches).
+void dropFileCache(const std::string& filename) {
+  int fd = open(filename.c_str(), O_RDONLY);
+  if (fd < 0) {
+    std::cerr << "Warning: could not open file for cache drop\n";
+    return;
+  }
+
+  // flush any dirty pages to disk first
+  fdatasync(fd);
+
+  // advise the kernel to release cached pages for this file
+  off_t len = lseek(fd, 0, SEEK_END);
+  if (len > 0) {
+    int ret = posix_fadvise(fd, 0, len, POSIX_FADV_DONTNEED);
+    if (ret != 0) {
+      std::cerr << "Warning: posix_fadvise failed (" << ret << ")\n";
+    } else {
+      std::cout << "Page cache dropped for file\n";
+    }
+  }
+  close(fd);
+}
+
 int main(int argc, char* argv[]) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
@@ -340,12 +396,29 @@ int main(int argc, char* argv[]) {
 
   std::string filename = argv[1];
 
-  auto start = std::chrono::high_resolution_clock::now();
-  processFile(filename);
-  auto end = std::chrono::high_resolution_clock::now();
+  // get file size for speed calculations
+  std::ifstream sizeProbe(filename, std::ios::binary | std::ios::ate);
+  const size_t fileSize = sizeProbe.is_open() ? static_cast<size_t>(sizeProbe.tellg()) : 0;
+  sizeProbe.close();
+  const double megabytes = static_cast<double>(fileSize) / (1024.0 * 1024.0);
 
-  std::chrono::duration<double> diff = end - start;
-  std::cout << "processFile took " << diff.count() * 1000 << " ms" << std::endl;
+  // --- BLF processing (cold cache) ---
+  dropFileCache(filename);
+
+  auto procStart = std::chrono::high_resolution_clock::now();
+  processFile(filename);
+  auto procEnd = std::chrono::high_resolution_clock::now();
+
+  const double proc_s = std::chrono::duration<double>(procEnd - procStart).count();
+
+  // --- raw read benchmark (cold cache) ---
+  dropFileCache(filename);
+  benchmarkRawRead(filename);
+
+  // --- summary (printed last so it doesn't scroll away) ---
+  std::cout << std::format("\n--- BLF processing ---\n");
+  std::cout << std::format("processFile took {:.3f} ms\n", proc_s * 1000.0);
+  std::cout << std::format("Avg processing speed: {:.2f} MiB/s\n", megabytes / proc_s);
 
   return 0;
 }
