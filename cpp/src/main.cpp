@@ -156,14 +156,18 @@ struct Cursor {
 
 
 // ---------------------------------------------------------------------------
-// MappedFile – RAII wrapper around mmap.
+// MappedFile – Maps file into memory and pre-faults in the background
 // ---------------------------------------------------------------------------
 struct MappedFile {
     void*  addr = MAP_FAILED;
     size_t size = 0;
+    std::thread prefault_thread;
 
     MappedFile() = default;
-    ~MappedFile() { if (addr != MAP_FAILED) munmap(addr, size); }
+    ~MappedFile() {
+        if (prefault_thread.joinable()) prefault_thread.join();
+        if (addr != MAP_FAILED) munmap(addr, size);
+    }
     MappedFile(const MappedFile&) = delete;
     MappedFile& operator=(const MappedFile&) = delete;
 
@@ -176,16 +180,27 @@ struct MappedFile {
             spdlog::error("fstat failed for {}", path); close(fd); return false;
         }
         size = static_cast<size_t>(st.st_size);
-        // MAP_POPULATE: pre-fault all pages into the page cache during mmap().
-        // The kernel uses full I/O bandwidth for this (same path as read()),
-        // so we avoid single-threaded demand paging in the producer thread.
-        addr = mmap(nullptr, size, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+
+        // Map without MAP_POPULATE so mmap returns immediately.
+        addr = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
         close(fd);
         if (addr == MAP_FAILED) { spdlog::error("mmap failed for {}", path); return false; }
 
-        // MAP_POPULATE already faulted all pages; MADV_SEQUENTIAL keeps the
-        // kernel's readahead heuristic active for any future access.
-        madvise(addr, size, MADV_SEQUENTIAL);
+        // Start dedicated background thread to pre-fault pages at full I/O bandwidth.
+        // MADV_POPULATE_READ (Linux 5.14+) synchronously populates page tables,
+        // acting exactly like MAP_POPULATE but off the main thread.
+        prefault_thread = std::thread([this]() {
+#ifndef MADV_POPULATE_READ
+#define MADV_POPULATE_READ 22
+#endif
+            int ret = madvise(addr, size, MADV_POPULATE_READ);
+            if (ret != 0) {
+                // Fallback to sequential read-ahead
+                madvise(addr, size, MADV_SEQUENTIAL);
+                madvise(addr, size, MADV_WILLNEED);
+            }
+        });
+
         return true;
     }
 
@@ -477,7 +492,6 @@ void processFile(const std::string& filename, bool skipDecompress) {
   runPipeline(cursor, *fileHeader, nWorkers, skipDecompress);
   g_perf.pipelineNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
       Clock::now() - t0).count();
-  // MappedFile destructor calls munmap()
 }
 
 
