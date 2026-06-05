@@ -15,7 +15,6 @@
 #include <ctime>
 #include <format>
 #include <fstream>
-#include <istream>
 #include <mutex>
 #include <optional>
 #include <cstdint>
@@ -533,7 +532,7 @@ void processFile(const std::string& filename, bool skipDecompress) {
 
   MappedFile mf;
   if (!mf.open(filename)) return;
-  spdlog::info("Processing file: {} ({} bytes)", filename, mf.size);
+  spdlog::info("Processing file: {} ({:.2f} MiB)", filename, mf.size / (1024.0 * 1024.0));
 
   Cursor cursor = mf.cursor();
   auto fileHeader = readFileHeader(cursor);
@@ -601,14 +600,21 @@ void dropFileCache(const std::string& filename) {
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
-    spdlog::error("Usage: {} <filename> [--no-decompress]", argv[0]);
+    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark]", argv[0]);
     return 1;
   }
 
   spdlog::set_level(spdlog::level::info);
 
-  std::string filename     = argv[1];
-  bool        skipDecompress = (argc >= 3 && std::string(argv[2]) == "--no-decompress");
+  std::string filename = argv[1];
+  bool skipDecompress = false;
+  bool runBenchmark = false;
+
+  for (int i = 2; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--no-decompress") skipDecompress = true;
+    else if (arg == "--benchmark") runBenchmark = true;
+  }
 
   if (skipDecompress)
     spdlog::info("*** --no-decompress: consumers will skip inflate() ***");
@@ -627,8 +633,10 @@ int main(int argc, char* argv[]) {
   const double proc_s = std::chrono::duration<double>(procEnd - procStart).count();
 
   // --- raw read benchmark (cold cache) ---
-  dropFileCache(filename);
-  benchmarkRawRead(filename);
+  if (runBenchmark) {
+    dropFileCache(filename);
+    benchmarkRawRead(filename);
+  }
 
   // --- summary ---
   const double compMiB   = static_cast<double>(g_perf.compressedBytes)   / (1024.0 * 1024.0);
