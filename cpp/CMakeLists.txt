@@ -13,7 +13,14 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/gabime/spdlog.git
   GIT_TAG        v1.15.3
 )
-FetchContent_MakeAvailable(spdlog)
+FetchContent_Declare(
+  libdeflate
+  GIT_REPOSITORY https://github.com/ebiggers/libdeflate.git
+  GIT_TAG        v1.25
+)
+set(LIBDEFLATE_BUILD_GZIP OFF CACHE BOOL "" FORCE)
+set(LIBDEFLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(spdlog libdeflate)
 
 # Note: For prototype, assuming libraries are installed system-wide or via package manager.
 # CLI11 is header-only. libpqxx is for PostgreSQL.
@@ -26,9 +33,7 @@ add_executable(cpp_parser src/main.cpp)
 # Libraries
 # find_package(libpqxx REQUIRED)
 # target_link_libraries(cpp_parser PRIVATE libpqxx::pqxx)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(libdeflate REQUIRED IMPORTED_TARGET libdeflate)
-target_link_libraries(cpp_parser PRIVATE PkgConfig::libdeflate spdlog::spdlog)
+target_link_libraries(cpp_parser PRIVATE libdeflate_static spdlog::spdlog)
 
 # CLI11 (assuming it's available or we provide it in include/)
 # For now, just setup the structure.
