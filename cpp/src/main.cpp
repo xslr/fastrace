@@ -1,8 +1,13 @@
 #include <chrono>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 #include <atomic>
 #include <condition_variable>
 #include <cstdio>
@@ -159,19 +164,67 @@ struct Cursor {
 // MappedFile – Maps file into memory and pre-faults in the background
 // ---------------------------------------------------------------------------
 struct MappedFile {
+#ifdef _WIN32
+    void*  addr = nullptr;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    HANDLE hMapping = NULL;
+#else
     void*  addr = MAP_FAILED;
+#endif
     size_t size = 0;
     std::thread prefault_thread;
 
     MappedFile() = default;
     ~MappedFile() {
         if (prefault_thread.joinable()) prefault_thread.join();
+#ifdef _WIN32
+        if (addr) UnmapViewOfFile(addr);
+        if (hMapping) CloseHandle(hMapping);
+        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
+#else
         if (addr != MAP_FAILED) munmap(addr, size);
+#endif
     }
     MappedFile(const MappedFile&) = delete;
     MappedFile& operator=(const MappedFile&) = delete;
 
     bool open(const std::string& path) {
+#ifdef _WIN32
+        hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) { spdlog::error("Could not open file {}", path); return false; }
+
+        LARGE_INTEGER fileSize;
+        if (!GetFileSizeEx(hFile, &fileSize)) {
+            spdlog::error("GetFileSizeEx failed for {}", path); return false;
+        }
+        size = static_cast<size_t>(fileSize.QuadPart);
+
+        hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+        if (hMapping == NULL) { spdlog::error("CreateFileMapping failed for {}", path); return false; }
+
+        addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+        if (addr == NULL) { spdlog::error("MapViewOfFile failed for {}", path); return false; }
+
+        prefault_thread = std::thread([this]() {
+            HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
+            if (hKernel32) {
+                typedef BOOL (WINAPI *PrefetchVirtualMemory_t)(HANDLE, ULONG_PTR, PVOID, ULONG);
+                auto pPrefetch = (PrefetchVirtualMemory_t)GetProcAddress(hKernel32, "PrefetchVirtualMemory");
+                if (pPrefetch) {
+                    struct { PVOID VirtualAddress; SIZE_T NumberOfBytes; } entry = { addr, size };
+                    pPrefetch(GetCurrentProcess(), 1, &entry, 0);
+                    return;
+                }
+            }
+            // Fallback: manually fault pages
+            const size_t pageSize = 4096;
+            volatile char* p = static_cast<volatile char*>(addr);
+            for (size_t i = 0; i < size; i += pageSize) {
+                char c = p[i];
+                (void)c;
+            }
+        });
+#else
         int fd = ::open(path.c_str(), O_RDONLY);
         if (fd < 0) { spdlog::error("Could not open file {}", path); return false; }
 
@@ -201,6 +254,7 @@ struct MappedFile {
             }
         });
 
+#endif
         return true;
     }
 
@@ -526,6 +580,10 @@ void benchmarkRawRead(const std::string& filename) {
 
 // Evict a single file from the Linux page cache using posix_fadvise.
 void dropFileCache(const std::string& filename) {
+#ifdef _WIN32
+  // Windows doesn't have a direct equivalent to posix_fadvise(DONTNEED) for a single file cache drop
+  // without administrative privileges (using system-wide cache drop).
+#else
   int fd = open(filename.c_str(), O_RDONLY);
   if (fd < 0) { spdlog::warn("could not open file for cache drop"); return; }
 
@@ -537,6 +595,7 @@ void dropFileCache(const std::string& filename) {
     else          spdlog::debug("Page cache dropped for file");
   }
   close(fd);
+#endif
 }
 
 
@@ -593,3 +652,4 @@ int main(int argc, char* argv[]) {
 
   return 0;
 }
+
