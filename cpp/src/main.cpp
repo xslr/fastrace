@@ -4,12 +4,9 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #endif
 #include <atomic>
-#include <condition_variable>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -17,7 +14,6 @@
 #include <fstream>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <cstdint>
 #include <string>
@@ -27,72 +23,17 @@
 #include <libdeflate.h>
 #include <spdlog/spdlog.h>
 
-#pragma pack(push, 1)
-typedef struct {
-    uint16_t year;
-    uint16_t month;
-    uint16_t dayOfWeek;
-    uint16_t day;
-    uint16_t hour;
-    uint16_t minute;
-    uint16_t second;
-    uint16_t milliseconds;
-} BlfTimeStamp;
+#include "Cursor.h"
+#include "MappedFile.h"
+#include "WorkQueue.h"
+#include "BlfTypes.h"
 
-typedef struct {
-  char signature[4];
-  uint32_t headerSize;
-  uint32_t apiVersion;
-  uint8_t appId;
-  uint8_t compressionLevel;
-  uint8_t majorVersion;
-  uint8_t minorVersion;
-  uint64_t compressedSize;
-  uint64_t uncompressedSize;
-  uint32_t numObj;
-  uint32_t appBuildId;
-  BlfTimeStamp measurementStartTime;
-  BlfTimeStamp measurementEndTime;
-  uint64_t nextRestorepoint;
-} BlfFileHeader;
 
-typedef struct {
-  uint32_t signature;      // "LOBJ"
-  uint16_t headerSize;
-  uint16_t headerVersion;
-  uint32_t objectSize;
-  uint32_t objectType;
-} BlfObjectHeaderBase;
-
-typedef struct {
-  uint32_t flags;
-  uint16_t staticSize;
-  uint16_t version;
-  uint64_t timestamp;
-} BlfObjectHeader;
-
-struct CANMessage {
-  uint16_t channel;
-  uint8_t flags;
-  uint8_t dlc;
-  uint32_t id;
-  uint8_t data[8];
-};
-
-struct EthernetFrame {
-  uint16_t channel;
-  uint16_t flags;
-  uint32_t length;
-  // Data follows
-};
-#pragma pack(pop)
-
-enum BLFObjectType : uint32_t {
-  CAN_MESSAGE = 1,
-  CAN_MESSAGE2 = 86,
-  ETHERNET_FRAME = 120,
-  CONTAINER = 10
-};
+// ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
+// based on real traces, compressed objects seem to have a compression ratio of 4.5.
+constexpr size_t DECOMP_BUFFER_PREALLOC_RATIO = 6;
+constexpr uint32_t BLF_LOGG_SIGNATURE = 0x47474f4c;  // "LOGG"
+constexpr uint32_t BLF_LOBJ_SIGNATURE = 0x4a424f4c;  // "LOBJ"
 
 bool dumpObjContents = false;
 
@@ -118,206 +59,10 @@ std::string to_hex(const char* buf, size_t len) {
   return result;
 }
 
+
 std::string to_hex(uint32_t num) {
   return to_hex(reinterpret_cast<const char*>(&num), 4);
 }
-
-
-constexpr uint32_t BLF_LOGG_SIGNATURE = 0x47474f4c;  // "LOGG"
-constexpr uint32_t BLF_LOBJ_SIGNATURE = 0x4a424f4c;  // "LOBJ"
-
-
-// ---------------------------------------------------------------------------
-// Cursor – lightweight read-cursor over a contiguous memory region.
-// ---------------------------------------------------------------------------
-struct Cursor {
-    const char* base;
-    const char* end;
-    const char* pos;
-
-    bool   eof()       const noexcept { return pos >= end; }
-    size_t tell()      const noexcept { return static_cast<size_t>(pos - base); }
-    size_t remaining() const noexcept { return static_cast<size_t>(end - pos); }
-
-    bool read(void* dst, size_t n) noexcept {
-        if (pos + n > end) return false;
-        std::memcpy(dst, pos, n);
-        pos += n;
-        return true;
-    }
-
-    const char* peek(size_t n) noexcept {
-        if (pos + n > end) return nullptr;
-        const char* p = pos;
-        pos += n;
-        return p;
-    }
-
-    bool skip(size_t n) noexcept {
-        if (pos + n > end) return false;
-        pos += n;
-        return true;
-    }
-};
-
-
-// ---------------------------------------------------------------------------
-// MappedFile – Maps file into memory and pre-faults in the background
-// ---------------------------------------------------------------------------
-struct MappedFile {
-#ifdef _WIN32
-    void*  addr = nullptr;
-    HANDLE hFile = INVALID_HANDLE_VALUE;
-    HANDLE hMapping = NULL;
-#else
-    void*  addr = MAP_FAILED;
-#endif
-    size_t size = 0;
-    std::thread prefault_thread;
-
-    MappedFile() = default;
-    ~MappedFile() {
-        if (prefault_thread.joinable()) prefault_thread.join();
-#ifdef _WIN32
-        if (addr) UnmapViewOfFile(addr);
-        if (hMapping) CloseHandle(hMapping);
-        if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
-#else
-        if (addr != MAP_FAILED) munmap(addr, size);
-#endif
-    }
-    MappedFile(const MappedFile&) = delete;
-    MappedFile& operator=(const MappedFile&) = delete;
-
-    bool open(const std::string& path) {
-#ifdef _WIN32
-        hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (hFile == INVALID_HANDLE_VALUE) { spdlog::error("Could not open file {}", path); return false; }
-
-        LARGE_INTEGER fileSize;
-        if (!GetFileSizeEx(hFile, &fileSize)) {
-            spdlog::error("GetFileSizeEx failed for {}", path); return false;
-        }
-        size = static_cast<size_t>(fileSize.QuadPart);
-
-        hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-        if (hMapping == NULL) { spdlog::error("CreateFileMapping failed for {}", path); return false; }
-
-        addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
-        if (addr == NULL) { spdlog::error("MapViewOfFile failed for {}", path); return false; }
-
-        prefault_thread = std::thread([this]() {
-            HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
-            if (hKernel32) {
-                typedef BOOL (WINAPI *PrefetchVirtualMemory_t)(HANDLE, ULONG_PTR, PVOID, ULONG);
-                auto pPrefetch = (PrefetchVirtualMemory_t)GetProcAddress(hKernel32, "PrefetchVirtualMemory");
-                if (pPrefetch) {
-                    struct { PVOID VirtualAddress; SIZE_T NumberOfBytes; } entry = { addr, size };
-                    pPrefetch(GetCurrentProcess(), 1, &entry, 0);
-                    return;
-                }
-            }
-            // Fallback: manually fault pages
-            const size_t pageSize = 4096;
-            volatile char* p = static_cast<volatile char*>(addr);
-            for (size_t i = 0; i < size; i += pageSize) {
-                char c = p[i];
-                (void)c;
-            }
-        });
-#else
-        int fd = ::open(path.c_str(), O_RDONLY);
-        if (fd < 0) { spdlog::error("Could not open file {}", path); return false; }
-
-        struct stat st{};
-        if (fstat(fd, &st) != 0) {
-            spdlog::error("fstat failed for {}", path); close(fd); return false;
-        }
-        size = static_cast<size_t>(st.st_size);
-
-        // Map without MAP_POPULATE so mmap returns immediately.
-        addr = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
-        close(fd);
-        if (addr == MAP_FAILED) { spdlog::error("mmap failed for {}", path); return false; }
-
-        // Start dedicated background thread to pre-fault pages at full I/O bandwidth.
-        // MADV_POPULATE_READ (Linux 5.14+) synchronously populates page tables,
-        // acting exactly like MAP_POPULATE but off the main thread.
-        prefault_thread = std::thread([this]() {
-#ifndef MADV_POPULATE_READ
-#define MADV_POPULATE_READ 22
-#endif
-            int ret = madvise(addr, size, MADV_POPULATE_READ);
-            if (ret != 0) {
-                // Fallback to sequential read-ahead
-                madvise(addr, size, MADV_SEQUENTIAL);
-                madvise(addr, size, MADV_WILLNEED);
-            }
-        });
-
-#endif
-        return true;
-    }
-
-    Cursor cursor() const noexcept {
-        const char* b = static_cast<const char*>(addr);
-        return Cursor{b, b + size, b};
-    }
-};
-
-
-// ---------------------------------------------------------------------------
-// WorkQueue – bounded SPMC blocking queue for the producer-consumer pipeline.
-//
-// Capacity is set to a small multiple of the worker count.  This prevents the
-// producer from racing far ahead (which would expand memory pressure) while
-// still giving workers enough tasks to stay busy across scheduling jitter.
-// ---------------------------------------------------------------------------
-struct WorkQueue {
-  struct Item { const char* compData; size_t compSize; };
-
-  explicit WorkQueue(size_t cap) : cap_(cap), ring_(cap) {}
-
-  // Called by producer.  Blocks if the queue is full.
-  void push(Item item) {
-    std::unique_lock<std::mutex> lk(mu_);
-    cvSpace_.wait(lk, [&] { return count_ < cap_; });
-    ring_[tail_] = item;
-    tail_ = (tail_ + 1) % cap_;
-    ++count_;
-    cvWork_.notify_one();
-  }
-
-  // Called by consumers.  Returns nullopt when closed AND empty.
-  std::optional<Item> pop() {
-    std::unique_lock<std::mutex> lk(mu_);
-    cvWork_.wait(lk, [&] { return count_ > 0 || closed_; });
-    if (count_ == 0) return std::nullopt;
-    Item item = ring_[head_];
-    head_ = (head_ + 1) % cap_;
-    --count_;
-    cvSpace_.notify_one();
-    return item;
-  }
-
-  // Signal that no more items will be pushed.  Wakes all waiting consumers.
-  void close() {
-    std::unique_lock<std::mutex> lk(mu_);
-    closed_ = true;
-    cvWork_.notify_all();
-  }
-
-private:
-  const size_t             cap_;
-  std::vector<Item>        ring_;
-  size_t                   head_   = 0;
-  size_t                   tail_   = 0;
-  size_t                   count_  = 0;
-  bool                     closed_ = false;
-  std::mutex               mu_;
-  std::condition_variable  cvWork_;   // consumers wait here
-  std::condition_variable  cvSpace_;  // producer waits here
-};
 
 
 // ---------------------------------------------------------------------------
@@ -389,10 +134,6 @@ std::optional<BlfFileHeader> readFileHeader(Cursor& cursor) {
   return hdr;
 }
 
-// ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
-// based on real traces, compressed objects seem to have a compression ratio of 4.5.
-constexpr size_t FASTA_DECOMP_BUFFER_PREALLOC_RATIO = 6;
-
 
 // ---------------------------------------------------------------------------
 // runConsumer – consumer thread entry point.
@@ -419,7 +160,7 @@ static void runConsumer(WorkQueue& queue,
 
     // Grow the local buffer as needed; the buffer stays at the high-water mark
     // for the rest of this thread's lifetime.
-    const size_t needed = item->compSize * FASTA_DECOMP_BUFFER_PREALLOC_RATIO;
+    const size_t needed = item->compSize * DECOMP_BUFFER_PREALLOC_RATIO;
     if (localBuf.size() < needed) localBuf.resize(needed);
 
     // decompress the log object. expand decompression buffer if it is insufficient.

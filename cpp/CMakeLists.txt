@@ -28,7 +28,11 @@ FetchContent_MakeAvailable(spdlog libdeflate)
 include_directories(include)
 
 # Executable
-add_executable(cpp_parser src/main.cpp)
+add_executable(cpp_parser
+  src/main.cpp
+  src/MappedFile.cpp
+  src/WorkQueue.cpp
+)
 
 # Libraries
 # find_package(libpqxx REQUIRED)
