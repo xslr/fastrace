@@ -15,6 +15,8 @@
 #include <ctime>
 #include <format>
 #include <fstream>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <cstdint>
@@ -101,7 +103,7 @@ struct PerfCounters {
   uint64_t containers        = 0;
   uint64_t compressedBytes   = 0;
   uint64_t decompressedBytes = 0;
-  int64_t  pipelineNs        = 0;  // wall-clock: producer + consumers overlapped
+  int64_t  pipelineUs        = 0;  // wall-clock: producer + consumers overlapped
   size_t   nThreads          = 0;
 };
 static PerfCounters g_perf;
@@ -387,6 +389,64 @@ std::optional<BlfFileHeader> readFileHeader(Cursor& cursor) {
   return hdr;
 }
 
+// ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
+// based on real traces, compressed objects seem to have a compression ratio of 4.5.
+constexpr size_t FASTA_DECOMP_BUFFER_PREALLOC_RATIO = 6;
+
+
+// ---------------------------------------------------------------------------
+// runConsumer – consumer thread entry point.
+// Decompresses BLF container payloads popped from the work queue.
+// ---------------------------------------------------------------------------
+static void runConsumer(WorkQueue& queue,
+                        std::atomic<uint64_t>& atomicContainers,
+                        std::atomic<uint64_t>& atomicCompressed,
+                        std::atomic<uint64_t>& atomicDecompressed,
+                        bool skipDecompress) {
+  auto decomp = std::unique_ptr<libdeflate_decompressor, decltype(&libdeflate_free_decompressor)>(
+      libdeflate_alloc_decompressor(), libdeflate_free_decompressor);
+  if (!decomp) {
+    spdlog::error("Failed to allocate libdeflate decompressor");
+    return;
+  }
+  std::vector<char> localBuf;  // per-thread scratch; never freed until exit
+
+  while (auto item = queue.pop()) {
+    atomicContainers.fetch_add(1, std::memory_order_relaxed);
+    atomicCompressed.fetch_add(item->compSize, std::memory_order_relaxed);
+
+    if (skipDecompress) continue;
+
+    // Grow the local buffer as needed; the buffer stays at the high-water mark
+    // for the rest of this thread's lifetime.
+    const size_t needed = item->compSize * FASTA_DECOMP_BUFFER_PREALLOC_RATIO;
+    if (localBuf.size() < needed) localBuf.resize(needed);
+
+    // decompress the log object. expand decompression buffer if it is insufficient.
+    size_t actualOut = 0;
+    libdeflate_result res;
+    do {
+      res = libdeflate_zlib_decompress(
+          decomp.get(),
+          item->compData,  item->compSize,
+          localBuf.data(), localBuf.size(),
+          &actualOut);
+      if (LIBDEFLATE_INSUFFICIENT_SPACE == res) {
+        localBuf.resize(localBuf.size() * 2);
+        spdlog::debug("localBuf grown to {} B", localBuf.size());
+      }
+    } while (LIBDEFLATE_INSUFFICIENT_SPACE == res);
+
+    if (LIBDEFLATE_SUCCESS == res) {
+      atomicDecompressed.fetch_add(actualOut, std::memory_order_relaxed);
+      // TODO: process inner LOBJs in localBuf[0..actualOut)
+      // localBuf is hot in L3 cache here; no DRAM round-trip needed.
+    } else {
+      spdlog::error("libdeflate failed ({})", static_cast<int>(res));
+    }
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // runPipeline – single-pass producer-consumer pipeline.
@@ -402,9 +462,11 @@ std::optional<BlfFileHeader> readFileHeader(Cursor& cursor) {
 //   New approach (pipelined):
 //     Producer scans the mmap'd file sequentially, pushing {ptr, size} items
 //     to the work queue.  Consumers pop items and decompress into a small
-//     per-thread buffer that is REUSED across all containers on that thread.
-//     The reused buffer (~130 KB) stays hot in L3 cache; decompressed bytes
-//     are never written to DRAM.
+//     per-thread buffer. The decompression buffer is reused for  all containers
+//     on that thread.
+//     The reused buffer (~130 KB) should stay in L3 cache; decompressed bytes
+//     are (mostly) never written to DRAM. Try to process the decompressed
+//     containers before they are evicted from cache.
 //
 //     Total DRAM traffic: ~300 MB (one cold read pass, overlapped with compute)
 //
@@ -418,7 +480,7 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   using Clock = std::chrono::steady_clock;
 
   // Bound the queue to 4× workers: producer stays ahead without excessive
-  // memory pressure.  Each in-flight item is just a pointer + size (16 B).
+  // getting blocked by memory. Each in-flight item is just a pointer + size (16 B).
   WorkQueue queue(nWorkers * 4);
 
   // Shared perf counters written atomically by workers
@@ -426,57 +488,14 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   std::atomic<uint64_t> atomicCompressed{0};
   std::atomic<uint64_t> atomicDecompressed{0};
 
-  // ---- Consumer lambda ----
-  // Each consumer owns:
-  //   • one libdeflate_decompressor (no shared state between threads)
-  //   • one reusable output buffer (grows once to max container size, then
-  //     reused for all subsequent containers on this thread → stays in L3)
-  auto consumer = [&]() {
-    libdeflate_decompressor* decomp = libdeflate_alloc_decompressor();
-    std::vector<char> localBuf;  // per-thread scratch; never freed until exit
-
-    while (auto item = queue.pop()) {
-      atomicCompressed.fetch_add(item->compSize, std::memory_order_relaxed);
-
-      if (!skipDecompress) {
-        // Grow only when needed; the buffer stays at the high-water mark
-        // for the rest of this thread's lifetime.
-        const size_t needed = item->compSize * 6;
-        if (localBuf.size() < needed) localBuf.resize(needed);
-
-        size_t actualOut = 0;
-        libdeflate_result res;
-        do {
-          res = libdeflate_zlib_decompress(
-              decomp,
-              item->compData,  item->compSize,
-              localBuf.data(), localBuf.size(),
-              &actualOut);
-          if (res == LIBDEFLATE_INSUFFICIENT_SPACE) {
-            localBuf.resize(localBuf.size() * 2);
-            spdlog::debug("localBuf grown to {} B", localBuf.size());
-          }
-        } while (res == LIBDEFLATE_INSUFFICIENT_SPACE);
-
-        if (res == LIBDEFLATE_SUCCESS) {
-          atomicDecompressed.fetch_add(actualOut, std::memory_order_relaxed);
-          // TODO: process inner LOBJs in localBuf[0..actualOut)
-          // localBuf is hot in L3 cache here; no DRAM round-trip needed.
-        } else {
-          spdlog::error("libdeflate failed ({})", static_cast<int>(res));
-        }
-      }
-
-      atomicContainers.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    libdeflate_free_decompressor(decomp);
-  };
-
   // ---- Start consumers ----
   std::vector<std::thread> workers;
   workers.reserve(nWorkers);
-  for (size_t i = 0; i < nWorkers; ++i) workers.emplace_back(consumer);
+  for (size_t i = 0; i < nWorkers; ++i) {
+    workers.emplace_back(runConsumer, std::ref(queue), std::ref(atomicContainers),
+                         std::ref(atomicCompressed), std::ref(atomicDecompressed),
+                         skipDecompress);
+  }
 
   // ---- Producer (runs on calling thread, concurrent with consumers) ----
   // MADV_WILLNEED (set in MappedFile::open) has been pre-loading pages since
@@ -485,13 +504,14 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
 
   BlfObjectHeaderBase base;
   while (!cursor.eof()) {
+    // seek to start of next object and read it
     if (!findNextLobj(cursor, base.signature)) break;
     if (!cursor.read(reinterpret_cast<char*>(&base) + 4,
                      sizeof(BlfObjectHeaderBase) - 4)) break;
 
     spdlog::debug("pipeline: type={} objectSize={}", base.objectType, base.objectSize);
 
-    if (base.objectType == CONTAINER) {
+    if (CONTAINER == base.objectType) {
       BlfObjectHeader extHdr;
       if (!cursor.read(reinterpret_cast<char*>(&extHdr),
                        sizeof(BlfObjectHeaderBase))) break;
@@ -543,7 +563,7 @@ void processFile(const std::string& filename, bool skipDecompress) {
 
   auto t0 = Clock::now();
   runPipeline(cursor, *fileHeader, nWorkers, skipDecompress);
-  g_perf.pipelineNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+  g_perf.pipelineUs = std::chrono::duration_cast<std::chrono::microseconds>(
       Clock::now() - t0).count();
 }
 
@@ -616,21 +636,23 @@ int main(int argc, char* argv[]) {
     else if (arg == "--benchmark") runBenchmark = true;
   }
 
-  if (skipDecompress)
+  if (skipDecompress) {
     spdlog::info("*** --no-decompress: consumers will skip inflate() ***");
+  }
 
   std::ifstream sizeProbe(filename, std::ios::binary | std::ios::ate);
-  const size_t fileSize = sizeProbe.is_open() ? static_cast<size_t>(sizeProbe.tellg()) : 0;
+  const size_t sizeBytes = sizeProbe.is_open() ? static_cast<size_t>(sizeProbe.tellg()) : 0;
   sizeProbe.close();
-  const double megabytes = static_cast<double>(fileSize) / (1024.0 * 1024.0);
+  const double sizeMegabytes = static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
 
   // --- BLF processing (cold cache) ---
+  // TODO: we want to drop caches only when measuring performance
   dropFileCache(filename);
 
-  auto procStart = std::chrono::high_resolution_clock::now();
+  auto procStartTs = std::chrono::high_resolution_clock::now();
   processFile(filename, skipDecompress);
-  auto procEnd = std::chrono::high_resolution_clock::now();
-  const double proc_s = std::chrono::duration<double>(procEnd - procStart).count();
+  auto procEndTs = std::chrono::high_resolution_clock::now();
+  const double proc_s = std::chrono::duration<double>(procEndTs - procStartTs).count();
 
   // --- raw read benchmark (cold cache) ---
   if (runBenchmark) {
@@ -641,11 +663,11 @@ int main(int argc, char* argv[]) {
   // --- summary ---
   const double compMiB   = static_cast<double>(g_perf.compressedBytes)   / (1024.0 * 1024.0);
   const double decompMiB = static_cast<double>(g_perf.decompressedBytes) / (1024.0 * 1024.0);
-  const double pipe_ms   = g_perf.pipelineNs * 1e-6;
+  const double pipe_ms   = g_perf.pipelineUs * 1e-3;
 
   spdlog::info("--- BLF processing ---");
   spdlog::info("processFile took      {:.3f} ms", proc_s * 1000.0);
-  spdlog::info("Avg processing speed: {:.2f} MiB/s (compressed throughput)", megabytes / proc_s);
+  spdlog::info("Avg processing speed: {:.2f} MiB/s (compressed throughput)", sizeMegabytes / proc_s);
   spdlog::info("--- Pipeline breakdown ---");
   spdlog::info("  Workers             : {}", g_perf.nThreads);
   spdlog::info("  Containers          : {}", g_perf.containers);
