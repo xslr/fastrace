@@ -31,7 +31,7 @@ MappedFile::~MappedFile() {
 bool MappedFile::open(const std::string& path) {
 #ifdef _WIN32
     hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) { spdlog::error("Could not open file {}", path); return false; }
+    if (INVALID_HANDLE_VALUE == hFile) { spdlog::error("Could not open file {}", path); return false; }
 
     LARGE_INTEGER fileSize;
     if (!GetFileSizeEx(hFile, &fileSize)) {
@@ -40,10 +40,10 @@ bool MappedFile::open(const std::string& path) {
     size = static_cast<size_t>(fileSize.QuadPart);
 
     hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-    if (hMapping == NULL) { spdlog::error("CreateFileMapping failed for {}", path); return false; }
+    if (NULL == hMapping) { spdlog::error("CreateFileMapping failed for {}", path); return false; }
 
     addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
-    if (addr == NULL) { spdlog::error("MapViewOfFile failed for {}", path); return false; }
+    if (NULL == addr) { spdlog::error("MapViewOfFile failed for {}", path); return false; }
 
     prefault_thread = std::thread([this]() {
         HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
@@ -77,7 +77,7 @@ bool MappedFile::open(const std::string& path) {
     // Map without MAP_POPULATE so mmap returns immediately.
     addr = ::mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
-    if (addr == MAP_FAILED) { spdlog::error("mmap failed for {}", path); return false; }
+    if (MAP_FAILED == addr) { spdlog::error("mmap failed for {}", path); return false; }
 
     // Start dedicated background thread to pre-fault pages at full I/O bandwidth.
     // MADV_POPULATE_READ (Linux 5.14+) synchronously populates page tables,

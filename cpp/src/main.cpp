@@ -73,24 +73,24 @@ std::string to_hex(uint32_t num) {
 static bool findNextLobj(Cursor& cursor, uint32_t& sigOut) {
   while (!cursor.eof()) {
     if (!cursor.read(&sigOut, 4)) return false;
-    if (sigOut == BLF_LOBJ_SIGNATURE) return true;
+    if (BLF_LOBJ_SIGNATURE == sigOut) return true;
 
-    if ((sigOut >> 8) == (BLF_LOBJ_SIGNATURE & 0x00FFFFFF)) {
+    if ((BLF_LOBJ_SIGNATURE & 0x00FFFFFF) == (sigOut >> 8)) {
       sigOut >>= 8;
       if (!cursor.read(reinterpret_cast<char*>(&sigOut) + 3, 1)) return false;
-      if (sigOut == BLF_LOBJ_SIGNATURE) return true;
+      if (BLF_LOBJ_SIGNATURE == sigOut) return true;
       spdlog::error("unrecoverable LOBJ misalign-1: 0x{:x}", sigOut); return false;
     }
-    if ((sigOut >> 16) == (BLF_LOBJ_SIGNATURE & 0x0000FFFF)) {
+    if ((BLF_LOBJ_SIGNATURE & 0x0000FFFF) == (sigOut >> 16)) {
       sigOut >>= 16;
       if (!cursor.read(reinterpret_cast<char*>(&sigOut) + 2, 2)) return false;
-      if (sigOut == BLF_LOBJ_SIGNATURE) return true;
+      if (BLF_LOBJ_SIGNATURE == sigOut) return true;
       spdlog::error("unrecoverable LOBJ misalign-2: 0x{:x}", sigOut); return false;
     }
-    if ((sigOut >> 24) == (BLF_LOBJ_SIGNATURE & 0x000000FF)) {
+    if ((BLF_LOBJ_SIGNATURE & 0x000000FF) == (sigOut >> 24)) {
       sigOut >>= 24;
       if (!cursor.read(reinterpret_cast<char*>(&sigOut) + 1, 3)) return false;
-      if (sigOut == BLF_LOBJ_SIGNATURE) return true;
+      if (BLF_LOBJ_SIGNATURE == sigOut) return true;
       spdlog::error("unrecoverable LOBJ misalign-3: 0x{:x}", sigOut); return false;
     }
 
@@ -152,6 +152,8 @@ static void runConsumer(WorkQueue& queue,
   }
   std::vector<char> localBuf;  // per-thread scratch; never freed until exit
 
+  // queue::pop will only return with an item (log object) or if the queue was closed.
+  // We do not risk prematurely terminating consumers due to starvation
   while (auto item = queue.pop()) {
     atomicContainers.fetch_add(1, std::memory_order_relaxed);
     atomicCompressed.fetch_add(item->compSize, std::memory_order_relaxed);
@@ -181,7 +183,7 @@ static void runConsumer(WorkQueue& queue,
     if (LIBDEFLATE_SUCCESS == res) {
       atomicDecompressed.fetch_add(actualOut, std::memory_order_relaxed);
       // TODO: process inner LOBJs in localBuf[0..actualOut)
-      // localBuf is hot in L3 cache here; no DRAM round-trip needed.
+      // localBuf should be in L3 cache here; no DRAM round-trip needed.
     } else {
       spdlog::error("libdeflate failed ({})", static_cast<int>(res));
     }
@@ -263,7 +265,6 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
       if (!compData) break;
 
       queue.push({compData, compSize});  // blocks if consumers are behind
-
     } else {
       // Skip non-CONTAINER object payload
       const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
@@ -324,7 +325,7 @@ void benchmarkRawRead(const std::string& filename) {
 
   auto start = std::chrono::high_resolution_clock::now();
   while (file.read(buf.data(), kBufSize) || file.gcount() > 0) {
-    if (file.gcount() == 0) break;
+    if (0 == file.gcount()) break;
   }
   auto end = std::chrono::high_resolution_clock::now();
 
@@ -373,8 +374,8 @@ int main(int argc, char* argv[]) {
 
   for (int i = 2; i < argc; ++i) {
     std::string arg = argv[i];
-    if (arg == "--no-decompress") skipDecompress = true;
-    else if (arg == "--benchmark") runBenchmark = true;
+    if ("--no-decompress" == arg) skipDecompress = true;
+    else if ("--benchmark" == arg) runBenchmark = true;
   }
 
   if (skipDecompress) {

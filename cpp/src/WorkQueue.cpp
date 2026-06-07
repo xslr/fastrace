@@ -14,7 +14,7 @@ void WorkQueue::push(Item item) {
 std::optional<WorkQueue::Item> WorkQueue::pop() {
   std::unique_lock<std::mutex> lk(mu_);
   cvWork_.wait(lk, [&] { return count_ > 0 || closed_; });
-  if (count_ == 0) return std::nullopt;
+  if (0 == count_) return std::nullopt;
   Item item = ring_[head_];
   head_ = (head_ + 1) % cap_;
   --count_;
