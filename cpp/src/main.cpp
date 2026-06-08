@@ -32,6 +32,8 @@
 #include "WorkQueue.h"
 #include "BlfTypes.h"
 
+#include <signal.h>
+
 
 // ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
 // based on real traces, compressed objects seem to have a compression ratio of 4.5.
@@ -297,30 +299,19 @@ static std::string_view objectTypeName(uint32_t t) {
 // On success: sigOut == BLF_LOBJ_SIGNATURE, cursor is past the 4-byte sig.
 // ---------------------------------------------------------------------------
 static bool findNextLobj(Cursor& cursor, uint32_t& sigOut) {
-  while (!cursor.eof()) {
-    if (!cursor.read(&sigOut, 4)) return false;
-    if (BLF_LOBJ_SIGNATURE == sigOut) return true;
-
-    if ((BLF_LOBJ_SIGNATURE & 0x00FFFFFF) == (sigOut >> 8)) {
-      sigOut >>= 8;
-      if (!cursor.read(reinterpret_cast<char*>(&sigOut) + 3, 1)) return false;
-      if (BLF_LOBJ_SIGNATURE == sigOut) return true;
-      spdlog::error("unrecoverable LOBJ misalign-1: 0x{:x}", sigOut); return false;
+  while (cursor.remaining() >= 4) {
+    // casting pointer to uint32 breaks c++ strict aliasing rules and is technically UB.
+    // this is still ok on x86-64. on ARM, fallback to memcpy
+#if defined(__x86_64__) || defined(_M_X64) || defined(_M_IX86)
+    sigOut = *reinterpret_cast<const uint32_t*>(cursor.pos);
+#else
+    std::memcpy(&sigOut, cursor.pos, 4);
+#endif
+    if (BLF_LOBJ_SIGNATURE == sigOut) {
+      cursor.pos += 4;
+      return true;
     }
-    if ((BLF_LOBJ_SIGNATURE & 0x0000FFFF) == (sigOut >> 16)) {
-      sigOut >>= 16;
-      if (!cursor.read(reinterpret_cast<char*>(&sigOut) + 2, 2)) return false;
-      if (BLF_LOBJ_SIGNATURE == sigOut) return true;
-      spdlog::error("unrecoverable LOBJ misalign-2: 0x{:x}", sigOut); return false;
-    }
-    if ((BLF_LOBJ_SIGNATURE & 0x000000FF) == (sigOut >> 24)) {
-      sigOut >>= 24;
-      if (!cursor.read(reinterpret_cast<char*>(&sigOut) + 1, 3)) return false;
-      if (BLF_LOBJ_SIGNATURE == sigOut) return true;
-      spdlog::error("unrecoverable LOBJ misalign-3: 0x{:x}", sigOut); return false;
-    }
-
-    spdlog::debug("scan: 0x{:x} is not LOBJ, continuing", sigOut);
+    cursor.pos += 1;
   }
   return false;
 }
