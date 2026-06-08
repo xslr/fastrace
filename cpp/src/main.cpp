@@ -53,11 +53,13 @@ bool dumpObjContents = false;
 //   * Returns counts via out-params so the caller can merge them into a single
 //     atomic update – minimising atomic traffic between threads.
 // ---------------------------------------------------------------------------
-// Forward declaration – defined later in this file.
+// Forward declarations – both are defined later in this file.
 static bool findNextLobj(Cursor& cursor, uint32_t& sigOut);
+static std::string_view objectTypeName(uint32_t t);
 
 static void processInnerObjects(const char* data, size_t dataLen,
-                                std::unordered_map<uint32_t, uint64_t>& counts) {
+                                std::unordered_map<uint32_t, uint64_t>& counts,
+                                uint64_t& splitCount) {
   Cursor cur{data, data + dataLen, data};
 
   BlfObjectHeaderBase base;
@@ -65,6 +67,32 @@ static void processInnerObjects(const char* data, size_t dataLen,
     if (!findNextLobj(cur, base.signature)) break;
     if (!cur.read(reinterpret_cast<char*>(&base) + 4,
                   sizeof(BlfObjectHeaderBase) - 4)) break;
+
+    // -----------------------------------------------------------------------
+    // Cross-container split detection.
+    //
+    // base.objectSize is the total byte length of this LOBJ (header + payload)
+    // measured from the start of the "LOBJ" signature.  The object started
+    // sizeof(BlfObjectHeaderBase) bytes before the current cursor position.
+    //
+    //   objectEnd = objectStart + base.objectSize
+    //             = (cur.tell() - sizeof(BlfObjectHeaderBase)) + base.objectSize
+    //
+    // If objectEnd > dataLen the encoder placed the tail of this object into
+    // the next compressed container – exactly the split case we want to detect.
+    // -----------------------------------------------------------------------
+    const size_t objectStart = cur.tell() - sizeof(BlfObjectHeaderBase);
+    const size_t objectEnd   = objectStart + base.objectSize;
+    if (objectEnd > dataLen) {
+      const size_t bytesAvail    = dataLen - objectStart;
+      const size_t bytesOverflow = objectEnd - dataLen;
+      spdlog::debug(
+          "SPLIT: type={} ({}) objectSize={} B  |  {} B in this container, {} B in next",
+          base.objectType, objectTypeName(base.objectType),
+          base.objectSize, bytesAvail, bytesOverflow);
+      ++splitCount;
+      break;  // remainder of this object lives in the next container; stop here
+    }
 
     // The object's payload starts right after the base header.
     // headerSize includes the 4-byte signature but NOT the BlfObjectHeader
@@ -147,6 +175,7 @@ struct PerfCounters {
   uint64_t containers        = 0;
   uint64_t compressedBytes   = 0;
   uint64_t decompressedBytes = 0;
+  uint64_t splitObjects      = 0;  // LOBJs whose tail extends past their container's end
   int64_t  pipelineUs        = 0;  // wall-clock: producer + consumers overlapped
   size_t   nThreads          = 0;
   // per-type object counts, merged from all consumer threads
@@ -362,6 +391,7 @@ static void runConsumer(WorkQueue& queue,
                         std::atomic<uint64_t>& atomicDecompressed,
                         std::mutex& countsMu,
                         std::unordered_map<uint32_t, uint64_t>& sharedCounts,
+                        uint64_t& sharedSplits,
                         bool skipDecompress) {
   auto decomp = std::unique_ptr<libdeflate_decompressor, decltype(&libdeflate_free_decompressor)>(
       libdeflate_alloc_decompressor(), libdeflate_free_decompressor);
@@ -371,6 +401,7 @@ static void runConsumer(WorkQueue& queue,
   }
   std::vector<char> localBuf;  // per-thread scratch; never freed until exit
   std::unordered_map<uint32_t, uint64_t> localCounts;  // accumulate without contention
+  uint64_t localSplitCount = 0;
 
   // queue::pop will only return with an item (log object) or if the queue was closed.
   // We do not risk prematurely terminating consumers due to starvation
@@ -404,7 +435,9 @@ static void runConsumer(WorkQueue& queue,
       atomicDecompressed.fetch_add(actualOut, std::memory_order_relaxed);
 
       // Parse inner LOBJs while the decompressed data is hot in L3 cache.
-      processInnerObjects(localBuf.data(), actualOut, localCounts);
+      uint64_t localSplits = 0;
+      processInnerObjects(localBuf.data(), actualOut, localCounts, localSplits);
+      if (localSplits) localSplitCount += localSplits;
     } else {
       spdlog::error("libdeflate failed ({})", static_cast<int>(res));
     }
@@ -412,10 +445,11 @@ static void runConsumer(WorkQueue& queue,
 
   // Thread is done: merge local counts into the shared map under a mutex.
   // This happens exactly once per thread, so contention is negligible.
-  if (!localCounts.empty()) {
+  if (!localCounts.empty() || localSplitCount > 0) {
     std::lock_guard<std::mutex> lk(countsMu);
     for (const auto& [type, cnt] : localCounts)
       sharedCounts[type] += cnt;
+    sharedSplits += localSplitCount;
   }
 }
 
@@ -499,9 +533,11 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   std::atomic<uint64_t> atomicContainers{0};
   std::atomic<uint64_t> atomicCompressed{0};
   std::atomic<uint64_t> atomicDecompressed{0};
-  // Per-type object counts: each thread accumulates locally, merges once at exit.
+  // Per-type object counts and split detections: accumulated locally per thread,
+  // merged once at thread exit under a mutex.
   std::mutex countsMu;
   std::unordered_map<uint32_t, uint64_t> sharedCounts;
+  uint64_t sharedSplits = 0;
 
   // ---- Start consumers ----
   std::vector<std::thread> workers;
@@ -510,6 +546,7 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
     workers.emplace_back(runConsumer, std::ref(queue), std::ref(atomicContainers),
                          std::ref(atomicCompressed), std::ref(atomicDecompressed),
                          std::ref(countsMu), std::ref(sharedCounts),
+                         std::ref(sharedSplits),
                          skipDecompress);
   }
 
@@ -525,6 +562,7 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   g_perf.compressedBytes   = atomicCompressed.load();
   g_perf.decompressedBytes = atomicDecompressed.load();
   g_perf.objectCounts      = std::move(sharedCounts);
+  g_perf.splitObjects      = sharedSplits;
   g_perf.nThreads          = nWorkers;
 }
 
@@ -605,7 +643,7 @@ void dropFileCache(const std::string& filename) {
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
-    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark] [--dump-objects]", argv[0]);
+    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark] [--dump-objects] [--debug]", argv[0]);
     return 1;
   }
 
@@ -620,6 +658,7 @@ int main(int argc, char* argv[]) {
     if ("--no-decompress" == arg)   skipDecompress = true;
     else if ("--benchmark" == arg)  runBenchmark   = true;
     else if ("--dump-objects" == arg) dumpObjContents = true;
+    else if ("--debug" == arg)      spdlog::set_level(spdlog::level::debug);
   }
 
   if (skipDecompress) {
@@ -665,6 +704,8 @@ int main(int argc, char* argv[]) {
                  compMiB  / (pipe_ms * 1e-3),
                  decompMiB / (pipe_ms * 1e-3));
   }
+  spdlog::info("  Split objects       : {}  (tail in next container; add --debug for per-split detail)",
+               g_perf.splitObjects);
   spdlog::info("--- Decoded objects (by type, sorted by count) ---");
   if (g_perf.objectCounts.empty()) {
     spdlog::info("  (none — run without --no-decompress to decode objects)");
