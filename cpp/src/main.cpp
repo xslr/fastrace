@@ -19,7 +19,11 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <algorithm>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
+#include <array>
 #include <libdeflate.h>
 #include <spdlog/spdlog.h>
 
@@ -38,6 +42,103 @@ constexpr uint32_t BLF_LOBJ_SIGNATURE = 0x4a424f4c;  // "LOBJ"
 bool dumpObjContents = false;
 
 // ---------------------------------------------------------------------------
+// processInnerObjects – walk decompressed container payload, decode CAN and
+// Ethernet log objects, and accumulate per-call counters.
+//
+// Design notes:
+//   * Operates entirely on the caller-supplied scratch buffer which is already
+//     hot in L3 cache after libdeflate writes it.  Zero extra copies.
+//   * Returns counts via out-params so the caller can merge them into a single
+//     atomic update – minimising atomic traffic between threads.
+// ---------------------------------------------------------------------------
+// Forward declaration – defined later in this file.
+static bool findNextLobj(Cursor& cursor, uint32_t& sigOut);
+
+static void processInnerObjects(const char* data, size_t dataLen,
+                                std::unordered_map<uint32_t, uint64_t>& counts) {
+  Cursor cur{data, data + dataLen, data};
+
+  BlfObjectHeaderBase base;
+  while (!cur.eof()) {
+    if (!findNextLobj(cur, base.signature)) break;
+    if (!cur.read(reinterpret_cast<char*>(&base) + 4,
+                  sizeof(BlfObjectHeaderBase) - 4)) break;
+
+    // The object's payload starts right after the base header.
+    // headerSize includes the 4-byte signature but NOT the BlfObjectHeader
+    // extension; it equals sizeof(BlfObjectHeaderBase) + sizeof(BlfObjectHeader)
+    // for type-1 headers, or may differ for type-2/3.  We read exactly
+    // (headerSize - sizeof(BlfObjectHeaderBase)) bytes of extra header,
+    // then the remaining payload is (objectSize - headerSize) bytes.
+    const size_t extraHdrBytes = base.headerSize > sizeof(BlfObjectHeaderBase)
+        ? base.headerSize - sizeof(BlfObjectHeaderBase)
+        : 0;
+    if (extraHdrBytes > 0) {
+      // Peek past the extended header without copying
+      if (!cur.skip(extraHdrBytes)) break;
+    }
+
+    const size_t payloadBytes = base.objectSize > base.headerSize
+        ? base.objectSize - base.headerSize
+        : 0;
+
+    switch (static_cast<BLFObjectType>(base.objectType)) {
+
+      case CAN_MESSAGE:
+      case CAN_MESSAGE2: {
+        if (payloadBytes < sizeof(CANMessage)) {
+          spdlog::debug("inner: CAN object too short ({} B)", payloadBytes);
+          cur.skip(payloadBytes);
+          break;
+        }
+        CANMessage msg;
+        cur.read(&msg, sizeof(CANMessage));
+        const size_t surplus = payloadBytes - sizeof(CANMessage);
+        if (surplus > 0) cur.skip(surplus);
+
+        ++counts[base.objectType];
+        if (dumpObjContents) {
+          const uint32_t rawId = msg.id;
+          const bool     ext   = (rawId >> 31) & 1;
+          const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          spdlog::debug("CAN ch={} id=0x{:x}{} dlc={} flags=0x{:02x}",
+                        msg.channel, arbId, ext ? "x" : "", msg.dlc, msg.flags);
+        }
+        break;
+      }
+
+      case ETHERNET_FRAME: {
+        if (payloadBytes < sizeof(EthernetFrameHeader)) {
+          spdlog::debug("inner: ETH object too short ({} B)", payloadBytes);
+          cur.skip(payloadBytes);
+          break;
+        }
+        EthernetFrameHeader eth;
+        cur.read(&eth, sizeof(EthernetFrameHeader));
+        const size_t surplus = payloadBytes - sizeof(EthernetFrameHeader);
+        if (surplus > 0) cur.skip(surplus);
+
+        ++counts[base.objectType];
+        if (dumpObjContents) {
+          spdlog::debug("ETH ch={} dir={} type=0x{:04x} paylen={}",
+                        eth.channel, eth.direction, eth.ethType, eth.payloadLength);
+        }
+        break;
+      }
+
+      case CONTAINER:
+        cur.skip(payloadBytes);
+        break;
+
+      default:
+        if (payloadBytes > 0) cur.skip(payloadBytes);
+        ++counts[base.objectType];
+        break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Per-run timing accumulators
 // ---------------------------------------------------------------------------
 struct PerfCounters {
@@ -46,6 +147,9 @@ struct PerfCounters {
   uint64_t decompressedBytes = 0;
   int64_t  pipelineUs        = 0;  // wall-clock: producer + consumers overlapped
   size_t   nThreads          = 0;
+  // per-type object counts, merged from all consumer threads
+  std::unordered_map<uint32_t, uint64_t> objectCounts;
+  std::mutex objectCountsMu;  // guards objectCounts during thread merges
 };
 static PerfCounters g_perf;
 
@@ -62,6 +166,128 @@ std::string to_hex(const char* buf, size_t len) {
 
 std::string to_hex(uint32_t num) {
   return to_hex(reinterpret_cast<const char*>(&num), 4);
+}
+
+
+// ---------------------------------------------------------------------------
+// objectTypeName – human-readable label for a BLF object type ID.
+// Returns "UNKNOWN_<n>" for any type not in the table.
+// ---------------------------------------------------------------------------
+static std::string_view objectTypeName(uint32_t t) {
+  static const auto names = [] {
+    std::array<std::string_view, 256> arr{};
+    arr[CAN_MESSAGE] = "CAN_MESSAGE";
+    arr[CAN_ERROR] = "CAN_ERROR";
+    arr[CAN_OVERLOAD] = "CAN_OVERLOAD";
+    arr[CAN_STATISTIC] = "CAN_STATISTIC";
+    arr[APP_TEXT] = "APP_TEXT";
+    arr[CAN_REMOTE_FRAME] = "CAN_REMOTE_FRAME";
+    arr[LIN_MESSAGE] = "LIN_MESSAGE";
+    arr[CONTAINER] = "CONTAINER";
+    arr[LIN_RX_ERROR] = "LIN_RX_ERROR";
+    arr[LIN_SEND_ERROR] = "LIN_SEND_ERROR";
+    arr[LIN_SLAVE_TIMEOUT] = "LIN_SLAVE_TIMEOUT";
+    arr[LIN_NOANS] = "LIN_NOANS";
+    arr[LIN_WAKEUP] = "LIN_WAKEUP";
+    arr[LIN_SPIKE] = "LIN_SPIKE";
+    arr[LIN_DLCINFO] = "LIN_DLCINFO";
+    arr[LIN_RCV_ERROR] = "LIN_RCV_ERROR";
+    arr[LIN_SYNCERROR] = "LIN_SYNCERROR";
+    arr[LIN_BAUDRATE] = "LIN_BAUDRATE";
+    arr[LIN_SLEEP] = "LIN_SLEEP";
+    arr[LIN_WAKEUP2] = "LIN_WAKEUP2";
+    arr[MOST_SPY] = "MOST_SPY";
+    arr[MOST_CTRL] = "MOST_CTRL";
+    arr[MOST_LIGHTLOCK] = "MOST_LIGHTLOCK";
+    arr[MOST_STATISTIC] = "MOST_STATISTIC";
+    arr[FLEXRAY_DATA] = "FLEXRAY_DATA";
+    arr[FLEXRAY_SYNC] = "FLEXRAY_SYNC";
+    arr[CAN_DRIVER_ERROR] = "CAN_DRIVER_ERROR";
+    arr[MOST_PKT] = "MOST_PKT";
+    arr[MOST_PKT2] = "MOST_PKT2";
+    arr[MOST_HWMODE] = "MOST_HWMODE";
+    arr[MOST_REG] = "MOST_REG";
+    arr[MOST_GENREG] = "MOST_GENREG";
+    arr[MOST_NETSTATE] = "MOST_NETSTATE";
+    arr[MOST_DATALOST] = "MOST_DATALOST";
+    arr[MOST_TRIGGER] = "MOST_TRIGGER";
+    arr[FLEXRAY_CYCLE] = "FLEXRAY_CYCLE";
+    arr[FLEXRAY_MESSAGE] = "FLEXRAY_MESSAGE";
+    arr[LIN_CHECKSUM_INFO] = "LIN_CHECKSUM_INFO";
+    arr[LIN_SPIKE_IGNORE] = "LIN_SPIKE_IGNORE";
+    arr[LIN_WAKEUP_INFO] = "LIN_WAKEUP_INFO";
+    arr[LIN_IN_PROGRESS] = "LIN_IN_PROGRESS";
+    arr[LIN_UNEXPECTED_WAKEUP] = "LIN_UNEXPECTED_WAKEUP";
+    arr[LIN_SHORT_OR_SLOW_RESPONSE] = "LIN_SHORT_OR_SLOW_RESPONSE";
+    arr[LIN_DISTURBANCE_EVENT] = "LIN_DISTURBANCE_EVENT";
+    arr[SERIAL_EVENT] = "SERIAL_EVENT";
+    arr[OVERRUN_ERROR] = "OVERRUN_ERROR";
+    arr[EVENT_COMMENT] = "EVENT_COMMENT";
+    arr[WLAN_FRAME] = "WLAN_FRAME";
+    arr[WLAN_STATISTIC] = "WLAN_STATISTIC";
+    arr[MOST_ECL] = "MOST_ECL";
+    arr[SYS_VARIABLE] = "SYS_VARIABLE";
+    arr[CAN_ERROR_EXT] = "CAN_ERROR_EXT";
+    arr[CAN_DRIVER_ERROR_EXT] = "CAN_DRIVER_ERROR_EXT";
+    arr[LIN_LONG_DOM_SIG] = "LIN_LONG_DOM_SIG";
+    arr[MOST_150_MESSAGE] = "MOST_150_MESSAGE";
+    arr[MOST_150_PKT] = "MOST_150_PKT";
+    arr[MOST_ETHERNET_PKT] = "MOST_ETHERNET_PKT";
+    arr[MOST_150_MESSAGE_FRAGMENT] = "MOST_150_MESSAGE_FRAGMENT";
+    arr[MOST_150_PKT_FRAGMENT] = "MOST_150_PKT_FRAGMENT";
+    arr[MOST_ETHERNET_PKT_FRAGMENT] = "MOST_ETHERNET_PKT_FRAGMENT";
+    arr[MOST_SYSTEM_EVENT] = "MOST_SYSTEM_EVENT";
+    arr[MOST_150_ALLOCTAB] = "MOST_150_ALLOCTAB";
+    arr[MOST_50_MESSAGE] = "MOST_50_MESSAGE";
+    arr[MOST_50_PKT] = "MOST_50_PKT";
+    arr[CAN_MESSAGE2] = "CAN_MESSAGE2";
+    arr[LIN_UNEXPECTED_WAKEUP2] = "LIN_UNEXPECTED_WAKEUP2";
+    arr[LIN_SHORT_OR_SLOW_RESPONSE3] = "LIN_SHORT_OR_SLOW_RESPONSE3";
+    arr[LIN_DISTURBANCE_EVENT2] = "LIN_DISTURBANCE_EVENT2";
+    arr[APP_TRIGGER] = "APP_TRIGGER";
+    arr[ENV_INTEGER] = "ENV_INTEGER";
+    arr[ENV_DOUBLE] = "ENV_DOUBLE";
+    arr[ENV_STRING] = "ENV_STRING";
+    arr[ENV_DATA] = "ENV_DATA";
+    arr[GRAPHICS_OBJECT] = "GRAPHICS_OBJECT";
+    arr[GLOBAL_MARKER] = "GLOBAL_MARKER";
+    arr[AFDX_FRAME] = "AFDX_FRAME";
+    arr[AFDX_STATISTIC] = "AFDX_STATISTIC";
+    arr[KLINE_STATUSEVENT] = "KLINE_STATUSEVENT";
+    arr[CAN_FD_MESSAGE] = "CAN_FD_MESSAGE";
+    arr[CAN_FD_MESSAGE_64] = "CAN_FD_MESSAGE_64";
+    arr[ETHERNET_RX_ERROR] = "ETHERNET_RX_ERROR";
+    arr[ETHERNET_STATUS] = "ETHERNET_STATUS";
+    arr[CAN_FD_ERROR_64] = "CAN_FD_ERROR_64";
+    arr[LIN_SHORT_OR_SLOW_RESPONSE2] = "LIN_SHORT_OR_SLOW_RESPONSE2";
+    arr[AFDX_STATUS] = "AFDX_STATUS";
+    arr[AFDX_BUS_STATISTIC] = "AFDX_BUS_STATISTIC";
+    arr[AFDX_ERROR_EVENT] = "AFDX_ERROR_EVENT";
+    arr[A429_ERROR] = "A429_ERROR";
+    arr[A429_STATUS] = "A429_STATUS";
+    arr[A429_BUS_STATISTIC] = "A429_BUS_STATISTIC";
+    arr[A429_MESSAGE] = "A429_MESSAGE";
+    arr[ETHERNET_STATISTIC] = "ETHERNET_STATISTIC";
+    arr[RESERVED_1] = "RESERVED_1";
+    arr[RESERVED_2] = "RESERVED_2";
+    arr[RESERVED_3] = "RESERVED_3";
+    arr[TEST_STRUCTURE] = "TEST_STRUCTURE";
+    arr[DIAG_REQUEST_INTERPRETATION] = "DIAG_REQUEST_INTERPRETATION";
+    arr[ETHERNET_FRAME] = "ETHERNET_FRAME";
+    arr[ETHERNET_FRAME_EX] = "ETHERNET_FRAME_EX";
+    arr[ETHERNET_ERROR_EX] = "ETHERNET_ERROR_EX";
+    arr[ETHERNET_ERROR_FORWARDED] = "ETHERNET_ERROR_FORWARDED";
+    arr[FUNC_BUS] = "FUNC_BUS";
+    arr[DATA_LOST_BEGIN] = "DATA_LOST_BEGIN";
+    arr[DATA_LOST_END] = "DATA_LOST_END";
+    arr[WATER_MARK_EVENT] = "WATER_MARK_EVENT";
+    arr[TRIGGER_CONDITION] = "TRIGGER_CONDITION";
+    arr[CAN_SETTING_CHANGED] = "CAN_SETTING_CHANGED";
+    arr[DISTRIBUTED_OBJECT] = "DISTRIBUTED_OBJECT";
+    return arr;
+  }();
+  if (t < names.size()) return names[t];
+  return {};
 }
 
 
@@ -143,6 +369,8 @@ static void runConsumer(WorkQueue& queue,
                         std::atomic<uint64_t>& atomicContainers,
                         std::atomic<uint64_t>& atomicCompressed,
                         std::atomic<uint64_t>& atomicDecompressed,
+                        std::mutex& countsMu,
+                        std::unordered_map<uint32_t, uint64_t>& sharedCounts,
                         bool skipDecompress) {
   auto decomp = std::unique_ptr<libdeflate_decompressor, decltype(&libdeflate_free_decompressor)>(
       libdeflate_alloc_decompressor(), libdeflate_free_decompressor);
@@ -151,6 +379,7 @@ static void runConsumer(WorkQueue& queue,
     return;
   }
   std::vector<char> localBuf;  // per-thread scratch; never freed until exit
+  std::unordered_map<uint32_t, uint64_t> localCounts;  // accumulate without contention
 
   // queue::pop will only return with an item (log object) or if the queue was closed.
   // We do not risk prematurely terminating consumers due to starvation
@@ -182,12 +411,61 @@ static void runConsumer(WorkQueue& queue,
 
     if (LIBDEFLATE_SUCCESS == res) {
       atomicDecompressed.fetch_add(actualOut, std::memory_order_relaxed);
-      // TODO: process inner LOBJs in localBuf[0..actualOut)
-      // localBuf should be in L3 cache here; no DRAM round-trip needed.
+
+      // Parse inner LOBJs while the decompressed data is hot in L3 cache.
+      processInnerObjects(localBuf.data(), actualOut, localCounts);
     } else {
       spdlog::error("libdeflate failed ({})", static_cast<int>(res));
     }
   }
+
+  // Thread is done: merge local counts into the shared map under a mutex.
+  // This happens exactly once per thread, so contention is negligible.
+  if (!localCounts.empty()) {
+    std::lock_guard<std::mutex> lk(countsMu);
+    for (const auto& [type, cnt] : localCounts)
+      sharedCounts[type] += cnt;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// runProducer – scan mmap'd file sequentially, push payload to work queue.
+// ---------------------------------------------------------------------------
+static void runProducer(Cursor cursor, WorkQueue& queue) {
+  using Clock = std::chrono::steady_clock;
+  auto prodStart = Clock::now();
+
+  BlfObjectHeaderBase base;
+  while (!cursor.eof()) {
+    // seek to start of next object and read it
+    if (!findNextLobj(cursor, base.signature)) break;
+    if (!cursor.read(reinterpret_cast<char*>(&base) + 4,
+                     sizeof(BlfObjectHeaderBase) - 4)) break;
+
+    spdlog::debug("pipeline: type={} objectSize={}", base.objectType, base.objectSize);
+
+    if (CONTAINER == base.objectType) {
+      BlfObjectHeader extHdr;
+      if (!cursor.read(reinterpret_cast<char*>(&extHdr),
+                       sizeof(BlfObjectHeaderBase))) break;
+
+      const size_t compSize =
+          base.objectSize - base.headerSize - sizeof(BlfObjectHeader);
+      const char* compData = cursor.peek(compSize);
+      if (!compData) break;
+
+      queue.push({compData, compSize});  // blocks if consumers are behind
+    } else {
+      // Skip non-CONTAINER object payload
+      const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
+      if (!cursor.skip(remaining)) break;
+    }
+  }
+
+  auto prodEnd = Clock::now();
+  const double prodMs = std::chrono::duration<double, std::milli>(prodEnd - prodStart).count();
+  spdlog::info("Producer done in {:.2f} ms; waiting for consumers...", prodMs);
 }
 
 
@@ -230,6 +508,9 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   std::atomic<uint64_t> atomicContainers{0};
   std::atomic<uint64_t> atomicCompressed{0};
   std::atomic<uint64_t> atomicDecompressed{0};
+  // Per-type object counts: each thread accumulates locally, merges once at exit.
+  std::mutex countsMu;
+  std::unordered_map<uint32_t, uint64_t> sharedCounts;
 
   // ---- Start consumers ----
   std::vector<std::thread> workers;
@@ -237,44 +518,14 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   for (size_t i = 0; i < nWorkers; ++i) {
     workers.emplace_back(runConsumer, std::ref(queue), std::ref(atomicContainers),
                          std::ref(atomicCompressed), std::ref(atomicDecompressed),
+                         std::ref(countsMu), std::ref(sharedCounts),
                          skipDecompress);
   }
 
   // ---- Producer (runs on calling thread, concurrent with consumers) ----
   // MADV_WILLNEED (set in MappedFile::open) has been pre-loading pages since
   // mmap returned, so many of these touches will hit the page cache.
-  auto prodStart = Clock::now();
-
-  BlfObjectHeaderBase base;
-  while (!cursor.eof()) {
-    // seek to start of next object and read it
-    if (!findNextLobj(cursor, base.signature)) break;
-    if (!cursor.read(reinterpret_cast<char*>(&base) + 4,
-                     sizeof(BlfObjectHeaderBase) - 4)) break;
-
-    spdlog::debug("pipeline: type={} objectSize={}", base.objectType, base.objectSize);
-
-    if (CONTAINER == base.objectType) {
-      BlfObjectHeader extHdr;
-      if (!cursor.read(reinterpret_cast<char*>(&extHdr),
-                       sizeof(BlfObjectHeaderBase))) break;
-
-      const size_t compSize =
-          base.objectSize - base.headerSize - sizeof(BlfObjectHeader);
-      const char* compData = cursor.peek(compSize);
-      if (!compData) break;
-
-      queue.push({compData, compSize});  // blocks if consumers are behind
-    } else {
-      // Skip non-CONTAINER object payload
-      const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
-      if (!cursor.skip(remaining)) break;
-    }
-  }
-
-  auto prodEnd = Clock::now();
-  const double prodMs = std::chrono::duration<double, std::milli>(prodEnd - prodStart).count();
-  spdlog::info("Producer done in {:.2f} ms; waiting for consumers...", prodMs);
+  runProducer(cursor, queue);
 
   queue.close();  // signal: no more items will be pushed
   for (auto& w : workers) w.join();
@@ -282,6 +533,7 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   g_perf.containers        = atomicContainers.load();
   g_perf.compressedBytes   = atomicCompressed.load();
   g_perf.decompressedBytes = atomicDecompressed.load();
+  g_perf.objectCounts      = std::move(sharedCounts);
   g_perf.nThreads          = nWorkers;
 }
 
@@ -362,7 +614,7 @@ void dropFileCache(const std::string& filename) {
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
-    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark]", argv[0]);
+    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark] [--dump-objects]", argv[0]);
     return 1;
   }
 
@@ -374,8 +626,9 @@ int main(int argc, char* argv[]) {
 
   for (int i = 2; i < argc; ++i) {
     std::string arg = argv[i];
-    if ("--no-decompress" == arg) skipDecompress = true;
-    else if ("--benchmark" == arg) runBenchmark = true;
+    if ("--no-decompress" == arg)   skipDecompress = true;
+    else if ("--benchmark" == arg)  runBenchmark   = true;
+    else if ("--dump-objects" == arg) dumpObjContents = true;
   }
 
   if (skipDecompress) {
@@ -420,6 +673,24 @@ int main(int argc, char* argv[]) {
     spdlog::info("  Decomp throughput   : {:.2f} MiB/s compressed  /  {:.2f} MiB/s uncompressed",
                  compMiB  / (pipe_ms * 1e-3),
                  decompMiB / (pipe_ms * 1e-3));
+  }
+  spdlog::info("--- Decoded objects (by type, sorted by count) ---");
+  if (g_perf.objectCounts.empty()) {
+    spdlog::info("  (none — run without --no-decompress to decode objects)");
+  } else {
+    // Sort entries by count descending for readability
+    std::vector<std::pair<uint32_t, uint64_t>> sorted(
+        g_perf.objectCounts.begin(), g_perf.objectCounts.end());
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    for (const auto& [type, cnt] : sorted) {
+      auto name = objectTypeName(type);
+      if (name.empty())
+        spdlog::info("  [{:>3}] {:<36} : {}", type, std::format("UNKNOWN_{}", type), cnt);
+      else
+        spdlog::info("  [{:>3}] {:<36} : {}", type, name, cnt);
+    }
   }
 
   return 0;
