@@ -6,7 +6,7 @@
 #include <optional>
 
 struct WorkQueue {
-  struct Item { const char* compData; size_t compSize; };
+  struct Item { const char* compData; size_t compSize; uint64_t containerIndex; };
 
   explicit WorkQueue(size_t cap);
 

@@ -21,6 +21,7 @@
 #include <type_traits>
 #include <algorithm>
 #include <mutex>
+#include <queue>
 #include <unordered_map>
 #include <vector>
 #include <array>
@@ -44,6 +45,7 @@ bool dumpObjContents = false;
 // ---------------------------------------------------------------------------
 // processInnerObjects – walk decompressed container payload, decode CAN and
 // Ethernet log objects, and accumulate per-call counters.
+// headFragOut and tailFragOut will be null when being called by the Stitcher.
 //
 // Design notes:
 //   * Operates entirely on the caller-supplied scratch buffer which is already
@@ -57,12 +59,23 @@ static std::string_view objectTypeName(uint32_t t);
 
 static void processInnerObjects(const char* data, size_t dataLen,
                                 std::unordered_map<uint32_t, uint64_t>& counts,
-                                uint64_t& splitCount) {
+                                uint64_t& splitCount,
+                                std::vector<char>* headFragOut = nullptr,
+                                std::vector<char>* tailFragOut = nullptr) {
   Cursor cur{data, data + dataLen, data};
 
   BlfObjectHeaderBase base;
+  bool firstObject = true;
   while (!cur.eof()) {
     if (!findNextLobj(cur, base.signature)) break;
+
+    if (firstObject) {
+      firstObject = false;
+      const size_t firstLobjAt = cur.tell() - 4;
+      if (firstLobjAt > 0 && headFragOut)
+        headFragOut->assign(data, data + firstLobjAt);
+    }
+
     if (!cur.read(reinterpret_cast<char*>(&base) + 4,
                   sizeof(BlfObjectHeaderBase) - 4)) break;
 
@@ -89,6 +102,8 @@ static void processInnerObjects(const char* data, size_t dataLen,
           base.objectType, objectTypeName(base.objectType),
           base.objectSize, bytesAvail, bytesOverflow);
       ++splitCount;
+      if (tailFragOut)
+        tailFragOut->assign(data + objectStart, data + dataLen);
       break;  // remainder of this object lives in the next container; stop here
     }
 
@@ -181,6 +196,44 @@ struct PerfCounters {
   std::mutex objectCountsMu;  // guards objectCounts during thread merges
 };
 static PerfCounters g_perf;
+
+
+// ---------------------------------------------------------------------------
+// Fragment types and queue for the Stitcher thread (Design F).
+// ---------------------------------------------------------------------------
+struct Fragment {
+  enum class Tag { Head, Tail };
+  Tag               tag;
+  uint64_t          containerIndex;
+  std::vector<char> bytes;
+};
+
+struct FragmentQueue {
+  void push(Fragment f) {
+    { std::lock_guard<std::mutex> lk(mu_); q_.push(std::move(f)); }
+    cv_.notify_one();
+  }
+
+  std::optional<Fragment> pop() {
+    std::unique_lock<std::mutex> lk(mu_);
+    cv_.wait(lk, [&] { return !q_.empty() || closed_; });
+    if (q_.empty()) return std::nullopt;
+    Fragment f = std::move(q_.front());
+    q_.pop();
+    return f;
+  }
+
+  void close() {
+    { std::lock_guard<std::mutex> lk(mu_); closed_ = true; }
+    cv_.notify_all();
+  }
+
+private:
+  std::queue<Fragment>    q_;
+  std::mutex              mu_;
+  std::condition_variable cv_;
+  bool                    closed_ = false;
+};
 
 
 std::string to_hex(const char* buf, size_t len) {
@@ -380,10 +433,78 @@ std::optional<BlfFileHeader> readFileHeader(Cursor& cursor) {
 
 
 // ---------------------------------------------------------------------------
+// runStitcher – dedicated thread that reassembles LOBJs split across two
+// adjacent compressed containers.
+//
+// Consumers push HeadFragment{i} (bytes before first LOBJ in container i) and
+// TailFragment{i} (bytes of the incomplete LOBJ at the tail of container i) to
+// the FragmentQueue.  The stitcher pairs TailFragment{i} with HeadFragment{i+1}
+// to form a complete buffer, then decodes it with processInnerObjects.
+// ---------------------------------------------------------------------------
+static void runStitcher(FragmentQueue& fragQ,
+                        std::mutex& countsMu,
+                        std::unordered_map<uint32_t, uint64_t>& sharedCounts,
+                        uint64_t& sharedSplits) {
+  std::unordered_map<uint64_t, std::vector<char>> pendingTails;
+  std::unordered_map<uint64_t, std::vector<char>> pendingHeads;
+  std::unordered_map<uint32_t, uint64_t> localCounts;
+  uint64_t localSplits = 0;
+  uint64_t stitched    = 0;
+
+  std::vector<char> localBuf;
+  auto assemble = [&](std::vector<char>& tail, std::vector<char>& head) {
+    localBuf.clear();
+    const auto sizeNeeded = tail.size() + head.size();
+    if (localBuf.capacity() < sizeNeeded) localBuf.reserve(sizeNeeded);
+    localBuf.insert(localBuf.end(), tail.begin(), tail.end());
+    localBuf.insert(localBuf.end(), head.begin(), head.end());
+    processInnerObjects(localBuf.data(), localBuf.size(), localCounts, localSplits);
+    ++stitched;
+  };
+
+  while (auto frag = fragQ.pop()) {
+    const uint64_t idx = frag->containerIndex;
+    if (frag->tag == Fragment::Tag::Tail) {
+      auto it = pendingHeads.find(idx + 1);
+      if (it != pendingHeads.end()) {
+        assemble(frag->bytes, it->second);
+        pendingHeads.erase(it);
+      } else {
+        pendingTails[idx] = std::move(frag->bytes);
+      }
+    } else {
+      auto it = pendingTails.find(idx - 1);
+      if (it != pendingTails.end()) {
+        assemble(it->second, frag->bytes);
+        pendingTails.erase(it);
+      } else {
+        pendingHeads[idx] = std::move(frag->bytes);
+      }
+    }
+  }
+
+  if (!pendingTails.empty())
+    spdlog::warn("Stitcher: {} unmatched tail(s) – split objects lost", pendingTails.size());
+  if (!pendingHeads.empty())
+    spdlog::debug("Stitcher: {} unmatched head(s) discarded (inter-object padding)",
+                  pendingHeads.size());
+  spdlog::debug("Stitcher: reassembled {} split object(s)", stitched);
+
+  if (!localCounts.empty() || localSplits > 0) {
+    std::lock_guard<std::mutex> lk(countsMu);
+    for (const auto& [type, cnt] : localCounts)
+      sharedCounts[type] += cnt;
+    sharedSplits += localSplits;
+  }
+}
+
+
+// ---------------------------------------------------------------------------
 // runConsumer – consumer thread entry point.
 // Decompresses BLF container payloads popped from the work queue.
 // ---------------------------------------------------------------------------
 static void runConsumer(WorkQueue& queue,
+                        FragmentQueue& fragQ,
                         std::atomic<uint64_t>& atomicContainers,
                         std::atomic<uint64_t>& atomicCompressed,
                         std::atomic<uint64_t>& atomicDecompressed,
@@ -433,9 +554,15 @@ static void runConsumer(WorkQueue& queue,
       atomicDecompressed.fetch_add(actualOut, std::memory_order_relaxed);
 
       // Parse inner LOBJs while the decompressed data is hot in L3 cache.
+      std::vector<char> headFrag, tailFrag;
       uint64_t localSplits = 0;
-      processInnerObjects(localBuf.data(), actualOut, localCounts, localSplits);
+      processInnerObjects(localBuf.data(), actualOut, localCounts, localSplits,
+                          &headFrag, &tailFrag);
       if (localSplits) localSplitCount += localSplits;
+      if (headFrag.size())
+        fragQ.push({Fragment::Tag::Head, item->containerIndex, std::move(headFrag)});
+      if (tailFrag.size())
+        fragQ.push({Fragment::Tag::Tail, item->containerIndex, std::move(tailFrag)});
     } else {
       spdlog::error("libdeflate failed ({})", static_cast<int>(res));
     }
@@ -458,6 +585,7 @@ static void runConsumer(WorkQueue& queue,
 static void runProducer(Cursor cursor, WorkQueue& queue) {
   using Clock = std::chrono::steady_clock;
   auto prodStart = Clock::now();
+  uint64_t containerIdx = 0;
 
   BlfObjectHeaderBase base;
   while (!cursor.eof()) {
@@ -478,7 +606,7 @@ static void runProducer(Cursor cursor, WorkQueue& queue) {
       const char* compData = cursor.peek(compSize);
       if (!compData) break;
 
-      queue.push({compData, compSize});  // blocks if consumers are behind
+      queue.push({compData, compSize, containerIdx++});  // blocks if consumers are behind
     } else {
       // Skip non-CONTAINER object payload
       const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
@@ -537,15 +665,20 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   std::unordered_map<uint32_t, uint64_t> sharedCounts;
   uint64_t sharedSplits = 0;
 
+  // ---- Fragment queue to store parts of split log objects and Stitcher thread ----
+  FragmentQueue fragQ;
+  std::thread stitcher(runStitcher, std::ref(fragQ), std::ref(countsMu),
+                       std::ref(sharedCounts), std::ref(sharedSplits));
+
   // ---- Start consumers ----
-  std::vector<std::thread> workers;
-  workers.reserve(nWorkers);
+  std::vector<std::thread> consumers;
+  consumers.reserve(nWorkers);
   for (size_t i = 0; i < nWorkers; ++i) {
-    workers.emplace_back(runConsumer, std::ref(queue), std::ref(atomicContainers),
-                         std::ref(atomicCompressed), std::ref(atomicDecompressed),
-                         std::ref(countsMu), std::ref(sharedCounts),
-                         std::ref(sharedSplits),
-                         skipDecompress);
+    consumers.emplace_back(runConsumer, std::ref(queue), std::ref(fragQ),
+                           std::ref(atomicContainers), std::ref(atomicCompressed),
+                           std::ref(atomicDecompressed), std::ref(countsMu),
+                           std::ref(sharedCounts), std::ref(sharedSplits),
+                           skipDecompress);
   }
 
   // ---- Producer (runs on calling thread, concurrent with consumers) ----
@@ -553,8 +686,12 @@ static void runPipeline(Cursor cursor, const BlfFileHeader& hdr,
   // mmap returned, so many of these touches will hit the page cache.
   runProducer(cursor, queue);
 
-  queue.close();  // signal: no more items will be pushed
-  for (auto& w : workers) w.join();
+  queue.close();  // this tells consumers that no more items will be pushed
+  for (auto& w : consumers) w.join();
+
+  // All consumers have exited; no more fragments will be pushed.
+  fragQ.close();
+  stitcher.join();
 
   g_perf.containers        = atomicContainers.load();
   g_perf.compressedBytes   = atomicCompressed.load();
@@ -668,7 +805,7 @@ int main(int argc, char* argv[]) {
   sizeProbe.close();
   const double sizeMegabytes = static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
 
-  // --- BLF processing (cold cache) ---
+  // --- BLF processing ---
   // TODO: we want to drop caches only when measuring performance
   dropFileCache(filename);
 
@@ -702,7 +839,7 @@ int main(int argc, char* argv[]) {
                  compMiB  / (pipe_ms * 1e-3),
                  decompMiB / (pipe_ms * 1e-3));
   }
-  spdlog::info("  Split objects       : {}  (tail in next container; add --debug for per-split detail)",
+  spdlog::info("  Split objects       : {}  (reassembled by Stitcher thread; add --debug for detail)",
                g_perf.splitObjects);
   spdlog::info("--- Decoded objects (by type, sorted by count) ---");
   if (g_perf.objectCounts.empty()) {
