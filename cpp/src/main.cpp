@@ -32,8 +32,6 @@
 #include "WorkQueue.h"
 #include "BlfTypes.h"
 
-#include <signal.h>
-
 
 // ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
 // based on real traces, compressed objects seem to have a compression ratio of 4.5.
