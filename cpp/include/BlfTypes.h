@@ -56,18 +56,74 @@ struct CANMessage {
 };
 using CANMessage2 = CANMessage;  // type 86 shares the same layout
 
-// ETHERNET_FRAME (type 120) fixed header; variable payload follows immediately.
+// CAN_FD_MESSAGE (type 100) fixed header; always followed by data[64] (padded with zeros).
+// Total payload is always 88 bytes (24-byte header + 64-byte data).
+struct CANFDMessage {
+  uint16_t channel;         // 1-based channel index
+  uint8_t  flags;           // 0x00=Rx
+  uint8_t  dlc;             // raw CAN FD DLC code (0-15)
+  uint32_t arbId;           // bit 31 set → extended 29-bit ID
+  uint32_t frameLength;     // frame length in ns (0 if not measured)
+  uint16_t btrCfgArb;       // arbitration bit-timing config
+  uint8_t  validDataBytes;  // actual data byte count (DLC→length mapped)
+  uint8_t  dir;             // 0=Rx, 1=Tx, 2=TxRq
+  uint8_t  reserved[8];
+  // uint8_t data[64] follows (always 64 bytes; zeros beyond validDataBytes)
+};
+static_assert(sizeof(CANFDMessage) == 24);
+
+// CAN_FD_MESSAGE_64 (type 101) fixed header; variable-length data follows.
+// payloadBytes = sizeof(CANFDMessage64) + validDataBytes (padded to next 4-byte boundary).
+struct CANFDMessage64 {
+  uint8_t  channel;             // 1-based channel index
+  uint8_t  dlc;                 // raw CAN FD DLC code (0-15)
+  uint8_t  validDataBytes;      // actual data byte count
+  uint8_t  txCount;             // transmit count
+  uint32_t arbId;               // bit 31 set → extended 29-bit ID
+  uint32_t frameLength;         // frame length in ns
+  uint32_t flags;               // bit 12: BRS, bit 13: EDL, bits 20-21: channel variant
+  uint16_t btrCfgArb;           // arbitration bit-timing config
+  uint16_t btrCfgData;          // data-phase bit-timing config
+  uint16_t timeOffsetBrsNs;     // BRS bit time offset in ns
+  uint16_t timeOffsetCrcDelNs;  // CRC delimiter time offset in ns
+  uint32_t crc;                 // CRC of the CAN FD frame
+  uint16_t bitCount;            // total bit count of frame
+  uint8_t  dir;                 // 0=Rx, 1=Tx, 2=TxRq
+  uint8_t  extDataOffset;       // byte offset to secondary payload (0 if none)
+  // remaining bytes: reserved + data[validDataBytes] (padded to 4-byte boundary)
+};
+static_assert(sizeof(CANFDMessage64) == 32);
+
+// ETHERNET_FRAME_EX (type 121) fixed header; variable Ethernet payload follows.
+struct EthernetFrameExHeader {
+  uint16_t structLength;    // total size of this header struct
+  uint16_t flags;           // frame flags
+  uint16_t channel;         // 1-based channel index
+  uint16_t dir;             // 0=Rx, 1=Tx, 2=TxRq
+  uint64_t reserved;
+  uint32_t asin;            // AUTOSAR service instance number
+  uint32_t frameChecksum;   // Ethernet FCS
+  uint16_t etherType;       // EtherType of the payload
+  uint16_t payloadLen;      // byte count of Ethernet payload that follows
+  uint32_t payloadFcs;      // FCS over payload
+  // payloadLen bytes of raw Ethernet payload follow immediately
+};
+static_assert(sizeof(EthernetFrameExHeader) == 32);
+
+// ETHERNET_FRAME (type 120) fixed header; raw Ethernet payload follows immediately.
+// Note: no MAC addresses in the BLF struct — those live inside the raw payload bytes.
 struct EthernetFrameHeader {
-  uint8_t  srcAddr[6];    // source MAC
-  uint16_t channel;       // logical channel index
-  uint8_t  dstAddr[6];    // destination MAC
-  uint16_t direction;     // 0=Rx, 1=Tx, 2=Tx-request
-  uint16_t ethType;       // EtherType (e.g. 0x0800=IPv4, 0x8100=VLAN)
-  uint16_t tpid;          // VLAN tag protocol identifier
-  uint16_t tci;           // VLAN tag control information
-  uint16_t payloadLength; // byte count of the payload that follows this header
-  uint64_t res;           // reserved / padding
-  // payloadLength bytes of Ethernet payload follow immediately
+  uint16_t structLength;  // remaining header bytes after this field (= 30)
+  uint16_t flags;
+  uint16_t channel;       // 1-based channel index
+  uint16_t direction;     // 0=Rx, 1=Tx, 2=TxRq
+  uint64_t reserved;
+  uint16_t ethType;       // EtherType (mirrors the value inside the raw payload)
+  uint16_t tpid;          // VLAN TPID
+  uint16_t tci;           // VLAN TCI
+  uint16_t payloadLength; // byte count of raw Ethernet payload that follows
+  uint64_t res2;
+  // payloadLength bytes of raw Ethernet frame data (dst MAC, src MAC, EtherType, ...) follow
 };
 #pragma pack(pop)
 

@@ -32,6 +32,7 @@
 #include "MappedFile.h"
 #include "WorkQueue.h"
 #include "BlfTypes.h"
+#include "NetTypes.h"
 
 
 // ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
@@ -41,6 +42,133 @@ constexpr uint32_t BLF_LOGG_SIGNATURE = 0x47474f4c;  // "LOGG"
 constexpr uint32_t BLF_LOBJ_SIGNATURE = 0x4a424f4c;  // "LOBJ"
 
 bool dumpObjContents = false;
+
+// ---------------------------------------------------------------------------
+// parseTransport – decode and log TCP/UDP headers from a raw Ethernet frame.
+// frame must point to the first byte of the Ethernet wire data (dst MAC).
+// ---------------------------------------------------------------------------
+static constexpr std::string_view kPTPMsgTypes[16] = {
+    "Sync", "Delay_Req", "Pdelay_Req", "Pdelay_Resp",
+    "?4",   "?5",        "?6",         "?7",
+    "Follow_Up", "Delay_Resp", "Pdelay_Resp_Follow_Up", "Announce",
+    "Signaling", "Management", "?14", "?15",
+};
+
+static void parsePTP(const char* data, size_t len) {
+    if (len < sizeof(PTPHeader)) return;
+    const auto* p = reinterpret_cast<const PTPHeader*>(data);
+    const uint8_t msgType = p->msgTypeTransSpec & 0x0Fu;
+    const auto& ci = p->clockIdentity;
+    spdlog::debug("    PTP {} dom={} seq={} src={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}:{}",
+        kPTPMsgTypes[msgType],
+        p->domainNumber,
+        __builtin_bswap16(p->sequenceId),
+        ci[0], ci[1], ci[2], ci[3], ci[4], ci[5], ci[6], ci[7],
+        __builtin_bswap16(p->sourcePortNumber));
+}
+
+// Format an IPv6 address as eight colon-separated 16-bit groups.
+static std::string fmtIPv6(const uint8_t addr[16]) {
+    return std::format("{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:"
+                       "{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}:{:02x}{:02x}",
+        addr[0],  addr[1],  addr[2],  addr[3],
+        addr[4],  addr[5],  addr[6],  addr[7],
+        addr[8],  addr[9],  addr[10], addr[11],
+        addr[12], addr[13], addr[14], addr[15]);
+}
+
+// Decode and log TCP/UDP from a raw Ethernet wire frame (dst MAC first).
+static void parseTransport(const char* frame, size_t frameLen) {
+    if (frameLen < sizeof(EthernetWireHeader)) return;
+
+    const auto* eth = reinterpret_cast<const EthernetWireHeader*>(frame);
+    size_t offset = sizeof(EthernetWireHeader);
+
+    uint16_t etherType = __builtin_bswap16(eth->etherType);
+
+    // Strip one VLAN tag (802.1Q or 802.1AD).
+    if ((etherType == 0x8100u || etherType == 0x88A8u) && frameLen >= offset + 4) {
+        uint16_t inner;
+        std::memcpy(&inner, frame + offset + 2, 2);
+        etherType = __builtin_bswap16(inner);
+        offset += 4;
+    }
+
+    if (etherType == 0x0800u) {
+        // IPv4
+        if (frameLen < offset + sizeof(IPv4Header)) return;
+        const auto* ip = reinterpret_cast<const IPv4Header*>(frame + offset);
+        const size_t ihlBytes = static_cast<size_t>(ip->versionIHL & 0x0Fu) * 4u;
+        if (ihlBytes < 20u || frameLen < offset + ihlBytes) return;
+        offset += ihlBytes;
+
+        if (ip->protocol == 6u && frameLen >= offset + sizeof(TCPHeader)) {
+            const auto* tcp = reinterpret_cast<const TCPHeader*>(frame + offset);
+            spdlog::debug("  TCP {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}",
+                ip->srcIP[0], ip->srcIP[1], ip->srcIP[2], ip->srcIP[3],
+                __builtin_bswap16(tcp->srcPort),
+                ip->dstIP[0], ip->dstIP[1], ip->dstIP[2], ip->dstIP[3],
+                __builtin_bswap16(tcp->dstPort),
+                tcp->flags);
+        } else if (ip->protocol == 17u && frameLen >= offset + sizeof(UDPHeader)) {
+            const auto* udp = reinterpret_cast<const UDPHeader*>(frame + offset);
+            const uint16_t sport = __builtin_bswap16(udp->srcPort);
+            const uint16_t dport = __builtin_bswap16(udp->dstPort);
+            const uint16_t udpLen = __builtin_bswap16(udp->length);
+            spdlog::debug("  UDP {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} len={}",
+                ip->srcIP[0], ip->srcIP[1], ip->srcIP[2], ip->srcIP[3], sport,
+                ip->dstIP[0], ip->dstIP[1], ip->dstIP[2], ip->dstIP[3], dport,
+                udpLen > 8u ? udpLen - 8u : 0u);
+            if (sport == 319u || sport == 320u || dport == 319u || dport == 320u)
+                parsePTP(frame + offset + sizeof(UDPHeader),
+                         frameLen - offset - sizeof(UDPHeader));
+        }
+    } else if (etherType == 0x86DDu) {
+        // IPv6 (fixed 40-byte header; skip extension headers until TCP/UDP)
+        if (frameLen < offset + sizeof(IPv6Header)) return;
+        const auto* ip6 = reinterpret_cast<const IPv6Header*>(frame + offset);
+        offset += sizeof(IPv6Header);
+
+        uint8_t nextHdr = ip6->nextHeader;
+        // Walk past common extension headers (routing=43, hop-by-hop=0, dest=60).
+        while (nextHdr == 0u || nextHdr == 43u || nextHdr == 60u) {
+            if (frameLen < offset + 2) return;
+            const uint8_t extLen = static_cast<uint8_t>(frame[offset + 1]);
+            nextHdr = static_cast<uint8_t>(frame[offset]);
+            offset += static_cast<size_t>(extLen + 1) * 8u;
+            if (frameLen < offset) return;
+        }
+        // Fragment header (44) is fixed 8 bytes.
+        if (nextHdr == 44u) {
+            if (frameLen < offset + 8) return;
+            nextHdr = static_cast<uint8_t>(frame[offset]);
+            offset += 8u;
+        }
+
+        if (nextHdr == 6u && frameLen >= offset + sizeof(TCPHeader)) {
+            const auto* tcp = reinterpret_cast<const TCPHeader*>(frame + offset);
+            spdlog::debug("  TCP [{}]:{} -> [{}]:{} flags=0x{:02x}",
+                fmtIPv6(ip6->srcAddr), __builtin_bswap16(tcp->srcPort),
+                fmtIPv6(ip6->dstAddr), __builtin_bswap16(tcp->dstPort),
+                tcp->flags);
+        } else if (nextHdr == 17u && frameLen >= offset + sizeof(UDPHeader)) {
+            const auto* udp = reinterpret_cast<const UDPHeader*>(frame + offset);
+            const uint16_t sport = __builtin_bswap16(udp->srcPort);
+            const uint16_t dport = __builtin_bswap16(udp->dstPort);
+            const uint16_t udpLen = __builtin_bswap16(udp->length);
+            spdlog::debug("  UDP [{}]:{} -> [{}]:{} len={}",
+                fmtIPv6(ip6->srcAddr), sport,
+                fmtIPv6(ip6->dstAddr), dport,
+                udpLen > 8u ? udpLen - 8u : 0u);
+            if (sport == 319u || sport == 320u || dport == 319u || dport == 320u)
+                parsePTP(frame + offset + sizeof(UDPHeader),
+                         frameLen - offset - sizeof(UDPHeader));
+        }
+    } else if (etherType == 0x88F7u) {
+        // PTP directly over Ethernet (no IP/UDP wrapper)
+        parsePTP(frame + offset, frameLen - offset);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // processInnerObjects – walk decompressed container payload, decode CAN and
@@ -144,8 +272,12 @@ static void processInnerObjects(const char* data, size_t dataLen,
           const uint32_t rawId = msg.id;
           const bool     ext   = (rawId >> 31) & 1;
           const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
-          spdlog::debug("CAN ch={} id=0x{:x}{} dlc={} flags=0x{:02x}",
-                        msg.channel, arbId, ext ? "x" : "", msg.dlc, msg.flags);
+          const uint8_t  dlen  = std::min(msg.dlc, uint8_t{8});
+          std::string hex; hex.reserve(dlen * 3);
+          for (uint8_t i = 0; i < dlen; ++i)
+            hex += std::format("{:02x} ", msg.data[i]);
+          spdlog::debug("CAN ch={} id=0x{:x}{} dlc={} data: {}",
+                        msg.channel, arbId, ext ? "x" : "", msg.dlc, hex);
         }
         break;
       }
@@ -158,13 +290,104 @@ static void processInnerObjects(const char* data, size_t dataLen,
         }
         EthernetFrameHeader eth;
         cur.read(&eth, sizeof(EthernetFrameHeader));
-        const size_t surplus = payloadBytes - sizeof(EthernetFrameHeader);
-        if (surplus > 0) cur.skip(surplus);
+        const char* frameData = cur.pos;   // raw Ethernet wire bytes (dst MAC, src MAC, ...)
+        const size_t frameLen = payloadBytes - sizeof(EthernetFrameHeader);
+        if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
         if (dumpObjContents) {
-          spdlog::debug("ETH ch={} dir={} type=0x{:04x} paylen={}",
-                        eth.channel, eth.direction, eth.ethType, eth.payloadLength);
+          const size_t dumpLen = std::min(frameLen, size_t{20});
+          std::string hex; hex.reserve(dumpLen * 3);
+          for (size_t i = 0; i < dumpLen; ++i)
+            hex += std::format("{:02x} ", static_cast<uint8_t>(frameData[i]));
+          spdlog::debug("ETH ch={} dir={} paylen={} frame: {}",
+                        eth.channel, eth.direction, eth.payloadLength, hex);
+          parseTransport(frameData, frameLen);
+        }
+        break;
+      }
+
+      case CAN_FD_MESSAGE: {
+        if (payloadBytes < sizeof(CANFDMessage)) {
+          spdlog::debug("inner: CAN_FD object too short ({} B)", payloadBytes);
+          cur.skip(payloadBytes);
+          break;
+        }
+        CANFDMessage msg;
+        cur.read(&msg, sizeof(CANFDMessage));
+        const char* dataPtr  = cur.pos;  // data[64] follows the fixed header
+        const size_t dataAvail = payloadBytes - sizeof(CANFDMessage);
+        if (dataAvail > 0) cur.skip(dataAvail);
+
+        ++counts[base.objectType];
+        if (dumpObjContents) {
+          const uint32_t rawId = msg.arbId;
+          const bool     ext   = (rawId >> 31) & 1;
+          const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          const size_t   dlen  = std::min(static_cast<size_t>(msg.validDataBytes), dataAvail);
+          std::string hex; hex.reserve(dlen * 3);
+          for (size_t i = 0; i < dlen; ++i)
+            hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[i]));
+          spdlog::debug("CAN_FD ch={} id=0x{:x}{} dlc={} len={} data: {}",
+                        msg.channel, arbId, ext ? "x" : "", msg.dlc, msg.validDataBytes, hex);
+        }
+        break;
+      }
+
+      case CAN_FD_MESSAGE_64: {
+        if (payloadBytes < sizeof(CANFDMessage64)) {
+          spdlog::debug("inner: CAN_FD_64 object too short ({} B)", payloadBytes);
+          cur.skip(payloadBytes);
+          break;
+        }
+        CANFDMessage64 msg;
+        cur.read(&msg, sizeof(CANFDMessage64));
+        const char* dataPtr   = cur.pos;  // data follows (extDataOffset reserved bytes then payload)
+        const size_t dataAvail = payloadBytes - sizeof(CANFDMessage64);
+        if (dataAvail > 0) cur.skip(dataAvail);
+
+        ++counts[base.objectType];
+        if (dumpObjContents) {
+          const uint32_t rawId = msg.arbId;
+          const bool     ext   = (rawId >> 31) & 1;
+          const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          const bool     brs   = (msg.flags & 0x1000u) != 0;
+          const bool     edl   = (msg.flags & 0x2000u) != 0;
+          const size_t   skip  = msg.extDataOffset;  // reserved bytes before actual data
+          const size_t   dlen  = (dataAvail > skip)
+                                   ? std::min(static_cast<size_t>(msg.validDataBytes), dataAvail - skip)
+                                   : 0;
+          std::string hex; hex.reserve(dlen * 3);
+          for (size_t i = 0; i < dlen; ++i)
+            hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[skip + i]));
+          spdlog::debug("CAN_FD64 ch={} id=0x{:x}{} dlc={} len={} brs={} edl={} data: {}",
+                        +msg.channel, arbId, ext ? "x" : "", msg.dlc, msg.validDataBytes,
+                        brs, edl, hex);
+        }
+        break;
+      }
+
+      case ETHERNET_FRAME_EX: {
+        if (payloadBytes < sizeof(EthernetFrameExHeader)) {
+          spdlog::debug("inner: ETH_EX object too short ({} B)", payloadBytes);
+          cur.skip(payloadBytes);
+          break;
+        }
+        EthernetFrameExHeader eth;
+        cur.read(&eth, sizeof(EthernetFrameExHeader));
+        const char* frameData = cur.pos;   // raw Ethernet wire bytes
+        const size_t frameLen = payloadBytes - sizeof(EthernetFrameExHeader);
+        if (frameLen > 0) cur.skip(frameLen);
+
+        ++counts[base.objectType];
+        if (dumpObjContents) {
+          const size_t dumpLen = std::min(frameLen, size_t{20});
+          std::string hex; hex.reserve(dumpLen * 3);
+          for (size_t i = 0; i < dumpLen; ++i)
+            hex += std::format("{:02x} ", static_cast<uint8_t>(frameData[i]));
+          spdlog::debug("ETH_EX ch={} dir={} paylen={} frame: {}",
+                        eth.channel, eth.dir, eth.payloadLen, hex);
+          parseTransport(frameData, frameLen);
         }
         break;
       }
