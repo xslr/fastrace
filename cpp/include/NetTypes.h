@@ -1,5 +1,13 @@
 #pragma once
+#include <bit>
 #include <cstdint>
+
+// Portable big-endian → host conversion for 16-bit network fields.
+inline constexpr uint16_t beToHost16(uint16_t v) noexcept {
+    if constexpr (std::endian::native == std::endian::big)
+        return v;
+    return static_cast<uint16_t>((v >> 8u) | (v << 8u));
+}
 
 #pragma pack(push, 1)
 

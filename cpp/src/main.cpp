@@ -1,6 +1,7 @@
 #include <chrono>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -62,9 +63,9 @@ static void parsePTP(const char* data, size_t len) {
     spdlog::debug("    PTP {} dom={} seq={} src={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}:{}",
         kPTPMsgTypes[msgType],
         p->domainNumber,
-        __builtin_bswap16(p->sequenceId),
+        beToHost16(p->sequenceId),
         ci[0], ci[1], ci[2], ci[3], ci[4], ci[5], ci[6], ci[7],
-        __builtin_bswap16(p->sourcePortNumber));
+        beToHost16(p->sourcePortNumber));
 }
 
 // Format an IPv6 address as eight colon-separated 16-bit groups.
@@ -84,13 +85,13 @@ static void parseTransport(const char* frame, size_t frameLen) {
     const auto* eth = reinterpret_cast<const EthernetWireHeader*>(frame);
     size_t offset = sizeof(EthernetWireHeader);
 
-    uint16_t etherType = __builtin_bswap16(eth->etherType);
+    uint16_t etherType = beToHost16(eth->etherType);
 
     // Strip one VLAN tag (802.1Q or 802.1AD).
     if ((etherType == 0x8100u || etherType == 0x88A8u) && frameLen >= offset + 4) {
         uint16_t inner;
         std::memcpy(&inner, frame + offset + 2, 2);
-        etherType = __builtin_bswap16(inner);
+        etherType = beToHost16(inner);
         offset += 4;
     }
 
@@ -106,15 +107,15 @@ static void parseTransport(const char* frame, size_t frameLen) {
             const auto* tcp = reinterpret_cast<const TCPHeader*>(frame + offset);
             spdlog::debug("  TCP {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} flags=0x{:02x}",
                 ip->srcIP[0], ip->srcIP[1], ip->srcIP[2], ip->srcIP[3],
-                __builtin_bswap16(tcp->srcPort),
+                beToHost16(tcp->srcPort),
                 ip->dstIP[0], ip->dstIP[1], ip->dstIP[2], ip->dstIP[3],
-                __builtin_bswap16(tcp->dstPort),
+                beToHost16(tcp->dstPort),
                 tcp->flags);
         } else if (ip->protocol == 17u && frameLen >= offset + sizeof(UDPHeader)) {
             const auto* udp = reinterpret_cast<const UDPHeader*>(frame + offset);
-            const uint16_t sport = __builtin_bswap16(udp->srcPort);
-            const uint16_t dport = __builtin_bswap16(udp->dstPort);
-            const uint16_t udpLen = __builtin_bswap16(udp->length);
+            const uint16_t sport = beToHost16(udp->srcPort);
+            const uint16_t dport = beToHost16(udp->dstPort);
+            const uint16_t udpLen = beToHost16(udp->length);
             spdlog::debug("  UDP {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} len={}",
                 ip->srcIP[0], ip->srcIP[1], ip->srcIP[2], ip->srcIP[3], sport,
                 ip->dstIP[0], ip->dstIP[1], ip->dstIP[2], ip->dstIP[3], dport,
@@ -148,14 +149,14 @@ static void parseTransport(const char* frame, size_t frameLen) {
         if (nextHdr == 6u && frameLen >= offset + sizeof(TCPHeader)) {
             const auto* tcp = reinterpret_cast<const TCPHeader*>(frame + offset);
             spdlog::debug("  TCP [{}]:{} -> [{}]:{} flags=0x{:02x}",
-                fmtIPv6(ip6->srcAddr), __builtin_bswap16(tcp->srcPort),
-                fmtIPv6(ip6->dstAddr), __builtin_bswap16(tcp->dstPort),
+                fmtIPv6(ip6->srcAddr), beToHost16(tcp->srcPort),
+                fmtIPv6(ip6->dstAddr), beToHost16(tcp->dstPort),
                 tcp->flags);
         } else if (nextHdr == 17u && frameLen >= offset + sizeof(UDPHeader)) {
             const auto* udp = reinterpret_cast<const UDPHeader*>(frame + offset);
-            const uint16_t sport = __builtin_bswap16(udp->srcPort);
-            const uint16_t dport = __builtin_bswap16(udp->dstPort);
-            const uint16_t udpLen = __builtin_bswap16(udp->length);
+            const uint16_t sport = beToHost16(udp->srcPort);
+            const uint16_t dport = beToHost16(udp->dstPort);
+            const uint16_t udpLen = beToHost16(udp->length);
             spdlog::debug("  UDP [{}]:{} -> [{}]:{} len={}",
                 fmtIPv6(ip6->srcAddr), sport,
                 fmtIPv6(ip6->dstAddr), dport,
