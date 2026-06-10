@@ -13,6 +13,27 @@ add_executable(fastrace_ui
     src/main.cpp
     src/MainWindow.cpp
     src/MainWindow.h
+    src/TopBarWidget.cpp
+    src/TopBarWidget.h
+    src/TopBarWidget.ui
+    src/LeftPanelWidget.cpp
+    src/LeftPanelWidget.h
+    src/LeftPanelWidget.ui
+    src/TimelineWidget.cpp
+    src/TimelineWidget.h
+    src/TimelineWidget.ui
+    src/MessageListWidget.cpp
+    src/MessageListWidget.h
+    src/MessageListWidget.ui
+    src/MessageDetailsWidget.cpp
+    src/MessageDetailsWidget.h
+    src/MessageDetailsWidget.ui
+    src/ScriptEditorWidget.cpp
+    src/ScriptEditorWidget.h
+    src/ScriptEditorWidget.ui
+    src/AnalyzerPreviewWidget.cpp
+    src/AnalyzerPreviewWidget.h
+    src/AnalyzerPreviewWidget.ui
 )
 
 target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets fastrace_analyzer)
