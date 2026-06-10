@@ -32,17 +32,23 @@ FetchContent_MakeAvailable(spdlog libdeflate)
 # Include directories
 include_directories(include)
 
+# Library for analyzer components so UI can link against it
+add_library(fastrace_analyzer STATIC
+  src/MappedFile.cpp
+  src/WorkQueue.cpp
+)
+target_include_directories(fastrace_analyzer PUBLIC include)
+target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog)
+
 # Executable
 add_executable(cpp_parser
   src/main.cpp
-  src/MappedFile.cpp
-  src/WorkQueue.cpp
 )
 
 # Libraries
 # find_package(libpqxx REQUIRED)
 # target_link_libraries(cpp_parser PRIVATE libpqxx::pqxx)
-target_link_libraries(cpp_parser PRIVATE libdeflate_static spdlog::spdlog)
+target_link_libraries(cpp_parser PRIVATE fastrace_analyzer)
 
 # CLI11 (assuming it's available or we provide it in include/)
 # For now, just setup the structure.
