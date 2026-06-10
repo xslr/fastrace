@@ -31,9 +31,12 @@
 
 #include "Cursor.h"
 #include "MappedFile.h"
+#include "PacketStore.h"
 #include "WorkQueue.h"
 #include "BlfTypes.h"
 #include "NetTypes.h"
+#include <httplib.h>
+#include <nlohmann/json.hpp>
 
 
 // ratio used to allocate buffer for decompressed data. if insufficient, a reallocation would be triggered
@@ -42,7 +45,9 @@ constexpr size_t DECOMP_BUFFER_PREALLOC_RATIO = 6;
 constexpr uint32_t BLF_LOGG_SIGNATURE = 0x47474f4c;  // "LOGG"
 constexpr uint32_t BLF_LOBJ_SIGNATURE = 0x4a424f4c;  // "LOBJ"
 
-bool dumpObjContents = false;
+bool dumpObjContents  = false;
+bool g_collectPackets = false;
+PacketStore g_store;
 
 // ---------------------------------------------------------------------------
 // parseTransport – decode and log TCP/UDP headers from a raw Ethernet frame.
@@ -242,11 +247,17 @@ static void processInnerObjects(const char* data, size_t dataLen,
     // for type-1 headers, or may differ for type-2/3.  We read exactly
     // (headerSize - sizeof(BlfObjectHeaderBase)) bytes of extra header,
     // then the remaining payload is (objectSize - headerSize) bytes.
+    uint64_t timestamp = 0;
     const size_t extraHdrBytes = base.headerSize > sizeof(BlfObjectHeaderBase)
         ? base.headerSize - sizeof(BlfObjectHeaderBase)
         : 0;
-    if (extraHdrBytes > 0) {
-      // Peek past the extended header without copying
+    if (extraHdrBytes >= sizeof(BlfObjectHeader)) {
+      BlfObjectHeader extHdr;
+      if (!cur.read(&extHdr, sizeof(BlfObjectHeader))) break;
+      timestamp = extHdr.timestamp;
+      const size_t skipRem = extraHdrBytes - sizeof(BlfObjectHeader);
+      if (skipRem > 0 && !cur.skip(skipRem)) break;
+    } else if (extraHdrBytes > 0) {
       if (!cur.skip(extraHdrBytes)) break;
     }
 
@@ -269,6 +280,18 @@ static void processInnerObjects(const char* data, size_t dataLen,
         if (surplus > 0) cur.skip(surplus);
 
         ++counts[base.objectType];
+        if (g_collectPackets) {
+          const uint32_t rawId = msg.id;
+          const bool     ext   = (rawId >> 31) & 1;
+          StoredPacket pkt{};
+          pkt.timestamp_100ns = timestamp;
+          pkt.id      = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          pkt.type    = PacketType::CAN;
+          pkt.channel = static_cast<uint8_t>(msg.channel);
+          pkt.dlc     = msg.dlc;
+          std::memcpy(pkt.data, msg.data, std::min(msg.dlc, uint8_t{8}));
+          g_store.push(pkt);
+        }
         if (dumpObjContents) {
           const uint32_t rawId = msg.id;
           const bool     ext   = (rawId >> 31) & 1;
@@ -296,6 +319,14 @@ static void processInnerObjects(const char* data, size_t dataLen,
         if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
+        if (g_collectPackets) {
+          StoredPacket pkt{};
+          pkt.timestamp_100ns = timestamp;
+          pkt.type    = PacketType::ETH;
+          pkt.channel = static_cast<uint8_t>(eth.channel);
+          std::memcpy(pkt.data, frameData, std::min(frameLen, size_t{8}));
+          g_store.push(pkt);
+        }
         if (dumpObjContents) {
           const size_t dumpLen = std::min(frameLen, size_t{20});
           std::string hex; hex.reserve(dumpLen * 3);
@@ -321,6 +352,19 @@ static void processInnerObjects(const char* data, size_t dataLen,
         if (dataAvail > 0) cur.skip(dataAvail);
 
         ++counts[base.objectType];
+        if (g_collectPackets) {
+          const uint32_t rawId = msg.arbId;
+          const bool     ext   = (rawId >> 31) & 1;
+          StoredPacket pkt{};
+          pkt.timestamp_100ns = timestamp;
+          pkt.id      = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          pkt.type    = PacketType::CAN_FD;
+          pkt.channel = static_cast<uint8_t>(msg.channel);
+          pkt.dlc     = msg.dlc;
+          const size_t dlen = std::min({static_cast<size_t>(msg.validDataBytes), dataAvail, size_t{8}});
+          std::memcpy(pkt.data, dataPtr, dlen);
+          g_store.push(pkt);
+        }
         if (dumpObjContents) {
           const uint32_t rawId = msg.arbId;
           const bool     ext   = (rawId >> 31) & 1;
@@ -348,6 +392,23 @@ static void processInnerObjects(const char* data, size_t dataLen,
         if (dataAvail > 0) cur.skip(dataAvail);
 
         ++counts[base.objectType];
+        if (g_collectPackets) {
+          const uint32_t rawId = msg.arbId;
+          const bool     ext   = (rawId >> 31) & 1;
+          const size_t   skip  = msg.extDataOffset;
+          StoredPacket pkt{};
+          pkt.timestamp_100ns = timestamp;
+          pkt.id      = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          pkt.type    = PacketType::CAN_FD64;
+          pkt.channel = msg.channel;
+          pkt.dlc     = msg.dlc;
+          if (dataAvail > skip) {
+            const size_t dlen = std::min({static_cast<size_t>(msg.validDataBytes),
+                                          dataAvail - skip, size_t{8}});
+            std::memcpy(pkt.data, dataPtr + skip, dlen);
+          }
+          g_store.push(pkt);
+        }
         if (dumpObjContents) {
           const uint32_t rawId = msg.arbId;
           const bool     ext   = (rawId >> 31) & 1;
@@ -381,6 +442,14 @@ static void processInnerObjects(const char* data, size_t dataLen,
         if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
+        if (g_collectPackets) {
+          StoredPacket pkt{};
+          pkt.timestamp_100ns = timestamp;
+          pkt.type    = PacketType::ETH_EX;
+          pkt.channel = static_cast<uint8_t>(eth.channel);
+          std::memcpy(pkt.data, frameData, std::min(frameLen, size_t{8}));
+          g_store.push(pkt);
+        }
         if (dumpObjContents) {
           const size_t dumpLen = std::min(frameLen, size_t{20});
           std::string hex; hex.reserve(dumpLen * 3);
@@ -1000,9 +1069,104 @@ void dropFileCache(const std::string& filename) {
 }
 
 
+// ---------------------------------------------------------------------------
+// runServer – start the HTTP server after processFile() has populated g_store.
+// ---------------------------------------------------------------------------
+static void runServer(int port, const std::string& distDir, const std::string& tracePath) {
+  httplib::Server svr;
+
+  if (!distDir.empty()) {
+    if (!svr.set_mount_point("/", distDir.c_str()))
+      spdlog::warn("UI dist dir not found: {}  (API still reachable)", distDir);
+  }
+
+  svr.Get("/api/packets", [&](const httplib::Request& req, httplib::Response& res) {
+    size_t offset = 0, count = 200;
+    if (req.has_param("offset")) { try { offset = std::stoul(req.get_param_value("offset")); } catch (...) {} }
+    if (req.has_param("count"))  { try { count  = std::stoul(req.get_param_value("count"));  } catch (...) {} }
+    count = std::min(count, size_t{1000});
+
+    const size_t n     = g_store.size();
+    const size_t start = std::min(offset, n);
+    const size_t end   = std::min(start + count, n);
+
+    nlohmann::json arr = nlohmann::json::array();
+    for (size_t i = start; i < end; ++i) {
+      const auto& p = g_store.data()[i];
+      nlohmann::json obj;
+      obj["timestamp"] = static_cast<double>(p.timestamp_100ns) * 1e-7;
+      switch (p.type) {
+        case PacketType::CAN:     obj["type"] = "CAN";    break;
+        case PacketType::CAN_FD:  obj["type"] = "CAN_FD"; break;
+        case PacketType::CAN_FD64: obj["type"] = "CAN_FD"; break;
+        case PacketType::ETH:     obj["type"] = "ETH";    break;
+        case PacketType::ETH_EX:  obj["type"] = "ETH";    break;
+      }
+      obj["channel"] = static_cast<int>(p.channel);
+      obj["id"]      = p.id;
+      obj["dlc"]     = static_cast<int>(p.dlc);
+
+      // ETH packets store raw frame bytes (dst MAC onward); dlc is 0 for ETH so use 8.
+      const uint8_t dlen = (p.type == PacketType::ETH || p.type == PacketType::ETH_EX)
+                           ? 8u
+                           : std::min(static_cast<size_t>(p.dlc), size_t{8});
+      std::string hex;
+      hex.reserve(dlen * 3);
+      for (uint8_t j = 0; j < dlen; ++j) {
+        if (j > 0) hex += ' ';
+        hex += std::format("{:02X}", p.data[j]);
+      }
+      obj["data"] = hex;
+      arr.push_back(obj);
+    }
+
+    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_content(arr.dump(), "application/json");
+  });
+
+  svr.Get("/api/events", [&](const httplib::Request&, httplib::Response& res) {
+    const size_t total    = g_store.size();
+    const bool   wasCapped = g_store.capped();
+
+    nlohmann::json evt;
+    evt["type"]         = "status_update";
+    evt["status"]       = "ready";
+    evt["totalPackets"] = total;
+    evt["tracePath"]    = tracePath;
+    if (wasCapped) evt["capped"] = true;
+
+    // retry: 30000 → EventSource waits 30 s before reconnecting
+    std::string initMsg = "retry: 30000\ndata: " + evt.dump() + "\n\n";
+
+    res.set_header("Cache-Control",     "no-cache");
+    res.set_header("X-Accel-Buffering", "no");
+    res.set_header("Access-Control-Allow-Origin", "*");
+
+    // Keep the connection alive; heartbeat every 10 s so disconnected clients
+    // are detected quickly (cpp-httplib default thread pool = 8 threads).
+    res.set_chunked_content_provider("text/event-stream",
+      [payload = std::move(initMsg)](size_t /*offset*/, httplib::DataSink& sink) mutable -> bool {
+        if (!payload.empty()) {
+          bool ok = sink.write(payload.data(), payload.size());
+          payload.clear();
+          return ok;
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+        return sink.write(": ping\n\n", 8);
+      });
+  });
+
+  spdlog::info("HTTP server listening on http://0.0.0.0:{}", port);
+  spdlog::info("  Open: http://localhost:{}", port);
+  if (g_store.capped())
+    spdlog::warn("NOTE: store hit {} packet cap — some packets were dropped", PacketStore::CAP);
+  svr.listen("0.0.0.0", port);
+}
+
+
 int main(int argc, char* argv[]) {
   if (argc < 2) {
-    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark] [--dump-objects] [--debug]", argv[0]);
+    spdlog::error("Usage: {} <filename> [--no-decompress] [--benchmark] [--dump-objects] [--debug] [--serve <port>]", argv[0]);
     return 1;
   }
 
@@ -1011,6 +1175,7 @@ int main(int argc, char* argv[]) {
   std::string filename = argv[1];
   bool skipDecompress = false;
   bool runBenchmark = false;
+  int  servePort = 0;
 
   for (int i = 2; i < argc; ++i) {
     std::string arg = argv[i];
@@ -1018,6 +1183,14 @@ int main(int argc, char* argv[]) {
     else if ("--benchmark" == arg)  runBenchmark   = true;
     else if ("--dump-objects" == arg) dumpObjContents = true;
     else if ("--debug" == arg)      spdlog::set_level(spdlog::level::debug);
+    else if ("--serve" == arg && i + 1 < argc) {
+      try { servePort = std::stoi(argv[++i]); } catch (...) {}
+    }
+  }
+
+  if (servePort > 0) {
+    g_collectPackets = true;
+    g_store.init();  // lazy: skip the 140 MB resize on non-serving invocations
   }
 
   if (skipDecompress) {
@@ -1082,6 +1255,12 @@ int main(int argc, char* argv[]) {
       else
         spdlog::info("  [{:>3}] {:<36} : {}", type, name, cnt);
     }
+  }
+
+  if (servePort > 0) {
+    spdlog::info("Collected {} packet(s); sorting by timestamp…", g_store.size());
+    g_store.sort_by_time();
+    runServer(servePort, "./ui/dist", filename);
   }
 
   return 0;

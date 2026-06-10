@@ -25,7 +25,23 @@ FetchContent_Declare(
 )
 set(LIBDEFLATE_BUILD_GZIP OFF CACHE BOOL "" FORCE)
 set(LIBDEFLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(spdlog libdeflate)
+
+FetchContent_Declare(
+  httplib
+  GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+  GIT_TAG        v0.18.3
+)
+set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_REQUIRE_OPENSSL          OFF CACHE BOOL "" FORCE)
+
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG        v3.11.3
+)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(spdlog libdeflate httplib nlohmann_json)
 
 # Note: For prototype, assuming libraries are installed system-wide or via package manager.
 # CLI11 is header-only. libpqxx is for PostgreSQL.
@@ -42,7 +58,7 @@ add_executable(cpp_parser
 # Libraries
 # find_package(libpqxx REQUIRED)
 # target_link_libraries(cpp_parser PRIVATE libpqxx::pqxx)
-target_link_libraries(cpp_parser PRIVATE libdeflate_static spdlog::spdlog)
+target_link_libraries(cpp_parser PRIVATE libdeflate_static spdlog::spdlog httplib::httplib nlohmann_json::nlohmann_json)
 
 # CLI11 (assuming it's available or we provide it in include/)
 # For now, just setup the structure.
