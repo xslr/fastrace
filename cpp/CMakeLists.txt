@@ -27,6 +27,13 @@ set(LIBDEFLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(spdlog libdeflate)
 
 FetchContent_Declare(
+  pugixml
+  GIT_REPOSITORY https://github.com/zeux/pugixml.git
+  GIT_TAG        v1.14
+)
+FetchContent_MakeAvailable(pugixml)
+
+FetchContent_Declare(
   sqlite_amalgamation
   URL      https://www.sqlite.org/2026/sqlite-amalgamation-3530200.zip
   URL_HASH SHA3_256=81142986038e18f96c4a54e1a72562ae17e502a916f2a7701eff43388cbf1a40
@@ -57,9 +64,11 @@ add_library(fastrace_analyzer STATIC
   src/MappedFile.cpp
   src/WorkQueue.cpp
   src/RecentFiles.cpp
+  src/SignalDatabases.cpp
+  src/ArxmlParser.cpp
 )
 target_include_directories(fastrace_analyzer PUBLIC include)
-target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog sqlite3_amalg)
+target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog sqlite3_amalg pugixml::pugixml)
 
 # Executable
 add_executable(cpp_parser

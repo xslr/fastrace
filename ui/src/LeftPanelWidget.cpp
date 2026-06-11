@@ -1,11 +1,17 @@
 #include "LeftPanelWidget.h"
 #include "ui_LeftPanelWidget.h"
+#include "ArxmlParser.h"
+#include <QFileDialog>
 #include <QHeaderView>
+#include <QListWidgetItem>
 #include <QTreeWidgetItem>
-#include <QColor>
+#include <filesystem>
+#include <map>
 
 LeftPanelWidget::LeftPanelWidget(QWidget *parent)
-    : QWidget(parent), ui(new Ui::LeftPanelWidget)
+    : QWidget(parent)
+    , ui(new Ui::LeftPanelWidget)
+    , m_signalDbs()
 {
     ui->setupUi(this);
 
@@ -21,8 +27,15 @@ LeftPanelWidget::LeftPanelWidget(QWidget *parent)
     ui->busTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     ui->busTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
 
+    ui->sigTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    ui->serviceTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    ui->serviceTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+
+    connect(ui->btnAddDb,    &QPushButton::clicked, this, &LeftPanelWidget::onBtnAddDbClicked);
+    connect(ui->btnRemoveDb, &QPushButton::clicked, this, &LeftPanelWidget::onBtnRemoveDbClicked);
+
     populateTraceSummary();
-    populateBusTree();
+    loadDatabases();
 }
 
 LeftPanelWidget::~LeftPanelWidget()
@@ -30,58 +43,131 @@ LeftPanelWidget::~LeftPanelWidget()
     delete ui;
 }
 
+void LeftPanelWidget::onBtnAddDbClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("Open ARXML Signal Database"),
+        QString(),
+        tr("ARXML Files (*.arxml);;All Files (*)"));
+    if (path.isEmpty()) return;
+
+    m_signalDbs.addDatabase(path.toStdString());
+    loadDatabases();
+}
+
+void LeftPanelWidget::onBtnRemoveDbClicked()
+{
+    auto* item = ui->lstDatabases->currentItem();
+    if (!item) return;
+
+    const std::string path = item->data(Qt::UserRole).toString().toStdString();
+    m_signalDbs.removeDatabase(path);
+    loadDatabases();
+}
+
+void LeftPanelWidget::loadDatabases()
+{
+    const auto paths = m_signalDbs.getActiveDatabases();
+    m_arxmlDb = fastrace::ArxmlParser::parseFiles(paths);
+    populateDatabasesList();
+    populateSignalsTab();
+    populateMessagesTab();
+    populateEcusTab();
+    populateSomeIpTab();
+}
+
+void LeftPanelWidget::populateDatabasesList()
+{
+    ui->lstDatabases->clear();
+    for (const auto& path : m_signalDbs.getActiveDatabases()) {
+        const QString display = QString::fromStdString(
+            std::filesystem::path(path).filename().string());
+        auto* item = new QListWidgetItem(display, ui->lstDatabases);
+        item->setData(Qt::UserRole, QString::fromStdString(path));
+        item->setToolTip(QString::fromStdString(path));
+    }
+}
+
 void LeftPanelWidget::populateTraceSummary()
 {
     struct Row { const char *key; const char *value; };
     static const Row rows[] = {
-        {"Messages",  "12,358"},
-        {"ECUs",      "18"},
-        {"Start time","00:00:00.000"},
-        {"Duration",  "00:15:23.920"},
-        {"Bus",       "CAN FD 500 kbps, Ethernet"},
+        {"Messages",   "—"},
+        {"ECUs",       "—"},
+        {"Start time", "—"},
+        {"Duration",   "—"},
+        {"Bus",        "—"},
     };
 
     ui->traceSummary->setRowCount(5);
     for (int i = 0; i < 5; ++i) {
-        auto *kItem = new QTableWidgetItem(rows[i].key);
-
-        auto *vItem = new QTableWidgetItem(rows[i].value);
+        auto* kItem = new QTableWidgetItem(rows[i].key);
+        auto* vItem = new QTableWidgetItem(rows[i].value);
         vItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
         ui->traceSummary->setItem(i, 0, kItem);
         ui->traceSummary->setItem(i, 1, vItem);
     }
 }
 
-void LeftPanelWidget::populateBusTree()
+void LeftPanelWidget::populateMessagesTab()
 {
-    QTreeWidget *tree = ui->busTree;
+    ui->busTree->clear();
 
-    auto addChild = [&](QTreeWidgetItem *parent, const QString &id,
-                        const QString &count, bool select = false) {
-        auto *item = new QTreeWidgetItem(parent, QStringList{id, count});
-        item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-        if (select)
-            tree->setCurrentItem(item);
-    };
+    if (m_arxmlDb.messages.empty()) return;
 
-    auto *canNode = new QTreeWidgetItem(tree, QStringList{"CAN FD (500 kbps)"});
-    addChild(canNode, "0x101",        "1,245", true);
-    addChild(canNode, "0x102",        "1,245");
-    addChild(canNode, "0x120",        "623");
-    addChild(canNode, "0x1A0",        "512");
-    addChild(canNode, "0x2BC",        "432");
-    addChild(canNode, "0x3F1",        "256");
-    addChild(canNode, "0x5AA",        "128");
-    addChild(canNode, "0x7E0",        "64");
-    addChild(canNode, "0x7E1",        "64");
-    addChild(canNode, "...",          "");
-    canNode->setExpanded(true);
+    // Group by cluster
+    std::map<std::string, std::vector<const fastrace::ArMessage*>> byCluster;
+    for (const auto& msg : m_arxmlDb.messages)
+        byCluster[msg.cluster].push_back(&msg);
 
-    auto *ethNode = new QTreeWidgetItem(tree, QStringList{"Ethernet (100BASE-T1)"});
-    addChild(ethNode, "192.168.1.10", "3,421");
-    addChild(ethNode, "192.168.1.20", "2,112");
-    addChild(ethNode, "192.168.1.30", "1,005");
-    addChild(ethNode, "Multicast",    "320");
-    ethNode->setExpanded(true);
+    for (const auto& [cluster, msgs] : byCluster) {
+        auto* clNode = new QTreeWidgetItem(ui->busTree,
+            QStringList{QString::fromStdString(cluster)});
+        for (const auto* msg : msgs) {
+            const QString hexId = msg->isExtended
+                ? QString("0x%1").arg(msg->canId, 8, 16, QChar('0')).toUpper()
+                : QString("0x%1").arg(msg->canId, 3, 16, QChar('0')).toUpper();
+            new QTreeWidgetItem(clNode,
+                QStringList{QString::fromStdString(msg->name), hexId});
+        }
+        clNode->setExpanded(true);
+    }
+}
+
+void LeftPanelWidget::populateSignalsTab()
+{
+    ui->sigTree->clear();
+
+    for (const auto& msg : m_arxmlDb.messages) {
+        if (msg.signalDefs.empty()) continue;
+        auto* msgItem = new QTreeWidgetItem(ui->sigTree,
+            QStringList{QString::fromStdString(msg.name)});
+        for (const auto& sig : msg.signalDefs) {
+            new QTreeWidgetItem(msgItem, QStringList{
+                QString::fromStdString(sig.name),
+                QString::number(sig.startBit),
+                QString::number(sig.bitLength),
+                sig.isBigEndian ? "Motorola" : "Intel"
+            });
+        }
+    }
+}
+
+void LeftPanelWidget::populateEcusTab()
+{
+    ui->ecuList->clear();
+    for (const auto& ecu : m_arxmlDb.ecus)
+        ui->ecuList->addItem(QString::fromStdString(ecu.name));
+}
+
+void LeftPanelWidget::populateSomeIpTab()
+{
+    ui->serviceTree->clear();
+    for (const auto& svc : m_arxmlDb.someipServices) {
+        new QTreeWidgetItem(ui->serviceTree, QStringList{
+            QString::fromStdString(svc.name),
+            QString("0x%1").arg(svc.serviceId, 4, 16, QChar('0')).toUpper()
+        });
+    }
 }

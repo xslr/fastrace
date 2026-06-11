@@ -1,0 +1,50 @@
+#pragma once
+#include <cstdint>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace fastrace {
+
+struct ArSignal {
+    std::string name;
+    uint32_t    startBit    = 0;
+    uint32_t    bitLength   = 0;
+    bool        isBigEndian = false;
+};
+
+struct ArMessage {
+    std::string name;
+    uint32_t    canId      = 0;
+    bool        isExtended = false;
+    uint32_t    dlc        = 0;
+    std::string cluster;
+    std::vector<ArSignal> signalDefs;
+};
+
+struct ArSomeIpService {
+    std::string name;
+    uint16_t    serviceId = 0;
+};
+
+struct ArEcu {
+    std::string name;
+};
+
+struct ArDatabase {
+    std::vector<ArMessage>       messages;
+    std::vector<ArEcu>           ecus;
+    std::vector<ArSomeIpService> someipServices;
+
+    std::unordered_map<uint32_t, size_t> messageByCanId;
+
+    void buildIndex() {
+        messageByCanId.clear();
+        for (size_t i = 0; i < messages.size(); ++i)
+            messageByCanId[messages[i].canId] = i;
+    }
+
+    bool empty() const { return messages.empty() && ecus.empty() && someipServices.empty(); }
+};
+
+} // namespace fastrace

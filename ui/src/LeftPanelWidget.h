@@ -1,5 +1,7 @@
 #pragma once
 #include <QWidget>
+#include "ArxmlTypes.h"
+#include "SignalDatabases.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class LeftPanelWidget; }
@@ -11,9 +13,20 @@ public:
     explicit LeftPanelWidget(QWidget *parent = nullptr);
     ~LeftPanelWidget() override;
 
-private:
-    Ui::LeftPanelWidget *ui;
+private slots:
+    void onBtnAddDbClicked();
+    void onBtnRemoveDbClicked();
 
+private:
+    void loadDatabases();
+    void populateDatabasesList();
     void populateTraceSummary();
-    void populateBusTree();
+    void populateMessagesTab();
+    void populateSignalsTab();
+    void populateEcusTab();
+    void populateSomeIpTab();
+
+    Ui::LeftPanelWidget        *ui;
+    fastrace::SignalDatabases   m_signalDbs;
+    fastrace::ArDatabase        m_arxmlDb;
 };
