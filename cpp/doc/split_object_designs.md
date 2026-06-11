@@ -6,7 +6,7 @@ In the BLF format, the file consists of a `LOGG` header followed by a sequence o
 
 **The problem:** A single inner LOBJ can be split across two consecutive containers — part of its bytes are at the tail of container N's decompressed payload, and the rest are at the head of container N+1's decompressed payload.
 
-**Current behavior** ([main.cpp:86-94](file:///home/munu/playground/fastrace/cpp/src/main.cpp#L86-L94)): When [processInnerObjects](file:///home/munu/playground/fastrace/cpp/src/main.cpp#L60-L169) detects a split (`objectEnd > dataLen`), it logs the event, increments a counter, and **breaks** — the split object is silently dropped. Real traces show dozens of these per file.
+**Current behavior** ([main.cpp:86-94](file:///cpp/src/main.cpp#L86-L94)): When [processInnerObjects](file:///cpp/src/main.cpp#L60-L169) detects a split (`objectEnd > dataLen`), it logs the event, increments a counter, and **breaks** — the split object is silently dropped. Real traces show dozens of these per file.
 
 ```
 SPLIT: type=120 (ETHERNET_FRAME) objectSize=1550 B | 312 B in this container, 1238 B in next
