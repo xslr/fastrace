@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include "RecentFiles.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui { class TopBarWidget; }
@@ -18,7 +19,12 @@ signals:
 
 private slots:
     void onBtnOpenClicked();
+    void onComboActivated(int index);
 
 private:
+    void populateRecentCombo();
+    void openTrace(const QString& path);
+
     Ui::TopBarWidget *ui;
+    fastrace::RecentFiles m_recentFiles;
 };

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(fastrace_cpp VERSION 0.1.0 LANGUAGES CXX)
+project(fastrace_cpp VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +26,26 @@ set(LIBDEFLATE_BUILD_GZIP OFF CACHE BOOL "" FORCE)
 set(LIBDEFLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(spdlog libdeflate)
 
+FetchContent_Declare(
+  sqlite_amalgamation
+  URL      https://www.sqlite.org/2026/sqlite-amalgamation-3530200.zip
+  URL_HASH SHA3_256=81142986038e18f96c4a54e1a72562ae17e502a916f2a7701eff43388cbf1a40
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+cmake_policy(SET CMP0169 OLD)
+FetchContent_GetProperties(sqlite_amalgamation)
+if(NOT sqlite_amalgamation_POPULATED)
+  FetchContent_Populate(sqlite_amalgamation)
+endif()
+cmake_policy(SET CMP0169 NEW)
+
+add_library(sqlite3_amalg STATIC ${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c)
+target_include_directories(sqlite3_amalg PUBLIC ${sqlite_amalgamation_SOURCE_DIR})
+# Suppress warnings from the third-party amalgamation source
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+  target_compile_options(sqlite3_amalg PRIVATE -w)
+endif()
+
 # Note: For prototype, assuming libraries are installed system-wide or via package manager.
 # CLI11 is header-only. libpqxx is for PostgreSQL.
 # Include directories
@@ -36,9 +56,10 @@ add_library(fastrace_analyzer STATIC
   src/Analyzer.cpp
   src/MappedFile.cpp
   src/WorkQueue.cpp
+  src/RecentFiles.cpp
 )
 target_include_directories(fastrace_analyzer PUBLIC include)
-target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog)
+target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog sqlite3_amalg)
 
 # Executable
 add_executable(cpp_parser

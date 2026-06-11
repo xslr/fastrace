@@ -27,7 +27,7 @@
     <number>8</number>
    </property>
    <item>
-    <widget class="QComboBox" name="traceCombo">
+    <widget class="QComboBox" name="cmbTraceFile">
      <property name="minimumSize">
       <size>
        <width>250</width>
@@ -38,8 +38,8 @@
    </item>
    <item>
     <widget class="QPushButton" name="btnOpen">
-     <property name="icon">
-      <iconset theme="QIcon::ThemeIcon::FolderOpen"/>
+     <property name="text">
+      <string>Open</string>
      </property>
     </widget>
    </item>

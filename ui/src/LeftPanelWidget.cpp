@@ -44,7 +44,6 @@ void LeftPanelWidget::populateTraceSummary()
     ui->traceSummary->setRowCount(5);
     for (int i = 0; i < 5; ++i) {
         auto *kItem = new QTableWidgetItem(rows[i].key);
-        kItem->setForeground(QColor("#8b8b99"));
 
         auto *vItem = new QTableWidgetItem(rows[i].value);
         vItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -62,13 +61,11 @@ void LeftPanelWidget::populateBusTree()
                         const QString &count, bool select = false) {
         auto *item = new QTreeWidgetItem(parent, QStringList{id, count});
         item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
-        item->setForeground(1, QColor("#8b8b99"));
         if (select)
             tree->setCurrentItem(item);
     };
 
     auto *canNode = new QTreeWidgetItem(tree, QStringList{"CAN FD (500 kbps)"});
-    canNode->setForeground(0, QColor("#dcdcdc"));
     addChild(canNode, "0x101",        "1,245", true);
     addChild(canNode, "0x102",        "1,245");
     addChild(canNode, "0x120",        "623");
