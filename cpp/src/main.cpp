@@ -5,6 +5,7 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #endif
 #include <algorithm>
@@ -42,11 +43,27 @@ void benchmarkRawRead(const std::string& filename) {
   spdlog::info("Throughput: {:.2f} MiB/s", megabytes / seconds);
 }
 
-// Evict a single file from the Linux page cache using posix_fadvise.
+// Evict a single file from the page cache.
 void dropFileCache(const std::string& filename) {
 #ifdef _WIN32
-  // Windows doesn't have a direct equivalent to posix_fadvise(DONTNEED) for a single file cache drop
-  // without administrative privileges (using system-wide cache drop).
+  // Windows has no per-file cache eviction without admin privileges.
+#elif defined(__APPLE__)
+  int fd = open(filename.c_str(), O_RDONLY);
+  if (fd < 0) { spdlog::warn("could not open file for cache drop"); return; }
+
+  off_t len = lseek(fd, 0, SEEK_END);
+  if (len > 0) {
+    void* mapped = mmap(nullptr, static_cast<size_t>(len), PROT_READ, MAP_SHARED, fd, 0);
+    if (mapped == MAP_FAILED) {
+      spdlog::warn("mmap failed for cache drop");
+    } else {
+      int ret = madvise(mapped, static_cast<size_t>(len), MADV_DONTNEED);
+      if (ret != 0) spdlog::warn("madvise failed ({})", ret);
+      else          spdlog::debug("Page cache dropped for file");
+      munmap(mapped, static_cast<size_t>(len));
+    }
+  }
+  close(fd);
 #else
   int fd = open(filename.c_str(), O_RDONLY);
   if (fd < 0) { spdlog::warn("could not open file for cache drop"); return; }
