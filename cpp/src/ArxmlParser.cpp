@@ -47,11 +47,18 @@ struct CanFtInfo {
     std::string cluster;
 };
 
+struct EthPtInfo {
+    std::string shortName;
+    std::string pduRef;
+    std::string channel;
+};
+
 struct IndexMaps {
     std::unordered_map<std::string, ISignalInfo>  iSignals;
     std::unordered_map<std::string, IPduInfo>     iPdus;
     std::unordered_map<std::string, CanFrameInfo> canFrames;
     std::vector<CanFtInfo>                        frameTriggers;
+    std::vector<EthPtInfo>                        ethPduTriggers;
     std::vector<ArEcu>                            ecus;
     std::vector<ArSomeIpService>                  services;
 };
@@ -70,6 +77,26 @@ static void indexCanCluster(pugi::xml_node el, const char* clusterName, IndexMap
                 info.isExtended = mode && std::strcmp(mode, "EXTENDED") == 0;
                 info.frameRef   = ft.child("FRAME-REF").text().get();
                 maps.frameTriggers.push_back(std::move(info));
+            }
+        }
+    }
+}
+
+static void indexEthernetCluster(pugi::xml_node el, IndexMaps& maps) {
+    for (auto cond : el.child("ETHERNET-CLUSTER-VARIANTS")
+                        .children("ETHERNET-CLUSTER-CONDITIONAL")) {
+        for (auto chan : cond.child("PHYSICAL-CHANNELS")
+                            .children("ETHERNET-PHYSICAL-CHANNEL")) {
+            const char* chanName = cv(chan, "SHORT-NAME");
+            for (auto pt : chan.child("PDU-TRIGGERINGS").children("PDU-TRIGGERING")) {
+                auto pduRef = pt.child("I-PDU-REF");
+                if (std::strcmp(pduRef.attribute("DEST").value(), "I-SIGNAL-I-PDU") != 0)
+                    continue;
+                EthPtInfo info;
+                info.shortName = cv(pt, "SHORT-NAME");
+                info.pduRef    = pduRef.text().get();
+                info.channel   = chanName;
+                maps.ethPduTriggers.push_back(std::move(info));
             }
         }
     }
@@ -122,6 +149,9 @@ static void indexPackage(pugi::xml_node pkg, const std::string& parentPath, Inde
         }
         else if (std::strcmp(tag, "CAN-CLUSTER") == 0) {
             indexCanCluster(el, sn, maps);
+        }
+        else if (std::strcmp(tag, "ETHERNET-CLUSTER") == 0) {
+            indexEthernetCluster(el, maps);
         }
         else if (std::strcmp(tag, "ECU-INSTANCE") == 0) {
             maps.ecus.push_back(ArEcu{sn});
@@ -187,6 +217,34 @@ static ArDatabase buildDatabase(IndexMaps& maps) {
         db.messages.push_back(std::move(msg));
     }
 
+    // Ethernet PDU-TRIGGERINGs
+    for (auto& pt : maps.ethPduTriggers) {
+        ArMessage msg;
+        msg.name    = pt.shortName;
+        msg.cluster = pt.channel;
+        msg.busType = ArBusType::ETHERNET;
+
+        auto pduIt = maps.iPdus.find(pt.pduRef);
+        if (pduIt == maps.iPdus.end()) {
+            db.messages.push_back(std::move(msg));
+            continue;
+        }
+        msg.dlc = pduIt->second.byteLength;
+
+        for (const auto& sm : pduIt->second.mappings) {
+            ArSignal sig;
+            sig.name        = sm.name;
+            sig.startBit    = sm.startBit;
+            sig.isBigEndian = sm.isBigEndian;
+            auto sigIt = maps.iSignals.find(sm.iSignalRef);
+            if (sigIt != maps.iSignals.end())
+                sig.bitLength = sigIt->second.bitLength;
+            msg.signalDefs.push_back(std::move(sig));
+        }
+
+        db.messages.push_back(std::move(msg));
+    }
+
     db.buildIndex();
     return db;
 }
@@ -207,10 +265,11 @@ ArDatabase ArxmlParser::parseFile(const std::string& path) {
         indexPackage(pkg, "", maps);
     collectServices(autosar, maps);
 
-    spdlog::info("ArxmlParser: '{}' → {} signals, {} PDUs, {} frames, {} triggers, {} ECUs, {} services",
+    spdlog::info("ArxmlParser: '{}' → {} signals, {} PDUs, {} CAN triggers, {} ETH triggers, {} ECUs, {} services",
         path,
-        maps.iSignals.size(), maps.iPdus.size(), maps.canFrames.size(),
-        maps.frameTriggers.size(), maps.ecus.size(), maps.services.size());
+        maps.iSignals.size(), maps.iPdus.size(),
+        maps.frameTriggers.size(), maps.ethPduTriggers.size(),
+        maps.ecus.size(), maps.services.size());
 
     return buildDatabase(maps);
 }

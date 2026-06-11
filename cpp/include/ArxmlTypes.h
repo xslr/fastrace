@@ -13,12 +13,15 @@ struct ArSignal {
     bool        isBigEndian = false;
 };
 
+enum class ArBusType { CAN, ETHERNET };
+
 struct ArMessage {
     std::string name;
     uint32_t    canId      = 0;
     bool        isExtended = false;
     uint32_t    dlc        = 0;
     std::string cluster;
+    ArBusType   busType    = ArBusType::CAN;
     std::vector<ArSignal> signalDefs;
 };
 

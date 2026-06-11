@@ -116,20 +116,26 @@ void LeftPanelWidget::populateMessagesTab()
 
     if (m_arxmlDb.messages.empty()) return;
 
-    // Group by cluster
+    // Group by bus type + cluster label
     std::map<std::string, std::vector<const fastrace::ArMessage*>> byCluster;
-    for (const auto& msg : m_arxmlDb.messages)
-        byCluster[msg.cluster].push_back(&msg);
+    for (const auto& msg : m_arxmlDb.messages) {
+        const std::string prefix =
+            (msg.busType == fastrace::ArBusType::CAN) ? "CAN  " : "ETH  ";
+        byCluster[prefix + msg.cluster].push_back(&msg);
+    }
 
-    for (const auto& [cluster, msgs] : byCluster) {
+    for (const auto& [label, msgs] : byCluster) {
         auto* clNode = new QTreeWidgetItem(ui->busTree,
-            QStringList{QString::fromStdString(cluster)});
+            QStringList{QString::fromStdString(label)});
         for (const auto* msg : msgs) {
-            const QString hexId = msg->isExtended
-                ? QString("0x%1").arg(msg->canId, 8, 16, QChar('0')).toUpper()
-                : QString("0x%1").arg(msg->canId, 3, 16, QChar('0')).toUpper();
+            QString id;
+            if (msg->busType == fastrace::ArBusType::CAN) {
+                id = msg->isExtended
+                    ? QString("0x%1").arg(msg->canId, 8, 16, QChar('0')).toUpper()
+                    : QString("0x%1").arg(msg->canId, 3, 16, QChar('0')).toUpper();
+            }
             new QTreeWidgetItem(clNode,
-                QStringList{QString::fromStdString(msg->name), hexId});
+                QStringList{QString::fromStdString(msg->name), id});
         }
         clNode->setExpanded(true);
     }
