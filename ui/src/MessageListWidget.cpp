@@ -8,12 +8,10 @@ MessageListWidget::MessageListWidget(QWidget *parent)
 {
     ui->setupUi(this);
 
-    ui->msgListHeader->setObjectName("headerLabel");
     ui->btnColumns->setObjectName("iconBtn");
 
-    ui->viewCombo->addItem("All");
-    ui->busCombo->addItem("All");
-    ui->displayCombo->addItem("Default");
+    ui->cmbChannel->addItem("All");
+    ui->cmbView->addItem("Default");
 
     ui->msgTable->horizontalHeader()->setStretchLastSection(true);
     ui->msgTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
@@ -48,15 +46,16 @@ void MessageListWidget::populateTable()
 
     QFont monoFont("Consolas", 9);
 
+
     for (int r = 0; r < t->rowCount(); ++r) {
         const Row &row = rows[r];
         QStringList cols{row.time, row.bus, row.id, row.name, row.dlc, row.data, row.len, row.ecu};
         for (int c = 0; c < cols.size(); ++c) {
             auto *item = new QTableWidgetItem(cols[c]);
-            if (c == 5)
-                item->setFont(monoFont);
-            if (row.selected)
-                item->setBackground(QColor("#2a2d3d"));
+            // if (c == 5)
+            //     item->setFont(monoFont);
+            // if (row.selected)
+            //     item->setBackground(QColor("#2a2d3d"));
             t->setItem(r, c, item);
         }
     }

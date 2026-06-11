@@ -18,12 +18,6 @@ LeftPanelWidget::LeftPanelWidget(QWidget *parent)
     ui->traceSummary->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     ui->traceSummary->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
 
-    ui->btnOpenTrace->setStyleSheet("padding: 6px;");
-
-    ui->btnSearch->setStyleSheet(
-        "text-align: left; padding: 6px 10px; color: #8b8b99;"
-        " background-color: #111218; border: 1px solid #272a35;");
-
     ui->busTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     ui->busTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
 

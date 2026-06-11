@@ -3,89 +3,149 @@
  <class>MessageListWidget</class>
  <widget class="QWidget" name="MessageListWidget">
   <property name="geometry">
-   <rect><x>0</x><y>0</y><width>750</width><height>300</height></rect>
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>750</width>
+    <height>300</height>
+   </rect>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
-   <property name="leftMargin"><number>16</number></property>
-   <property name="topMargin"><number>16</number></property>
-   <property name="rightMargin"><number>16</number></property>
-   <property name="bottomMargin"><number>16</number></property>
-   <property name="spacing"><number>12</number></property>
+   <property name="spacing">
+    <number>12</number>
+   </property>
+   <property name="leftMargin">
+    <number>16</number>
+   </property>
+   <property name="topMargin">
+    <number>16</number>
+   </property>
+   <property name="rightMargin">
+    <number>16</number>
+   </property>
+   <property name="bottomMargin">
+    <number>16</number>
+   </property>
    <item>
     <layout class="QHBoxLayout" name="filtersLayout">
-     <property name="spacing"><number>6</number></property>
+     <property name="spacing">
+      <number>6</number>
+     </property>
      <item>
-      <widget class="QLabel" name="msgListHeader">
-       <property name="text"><string>MESSAGE LIST</string></property>
+      <widget class="QLabel" name="lblChannel">
+       <property name="text">
+        <string>Channel</string>
+       </property>
       </widget>
      </item>
      <item>
-      <spacer name="spacerHeader">
-       <property name="orientation"><enum>Qt::Horizontal</enum></property>
-       <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
-       <property name="sizeHint" stdset="0"><size><width>20</width><height>20</height></size></property>
-      </spacer>
-     </item>
-     <item>
-      <widget class="QLabel" name="lblView"><property name="text"><string>View:</string></property></widget>
-     </item>
-     <item>
-      <widget class="QComboBox" name="viewCombo"/>
+      <widget class="QComboBox" name="cmbChannel"/>
      </item>
      <item>
       <spacer name="spacerV">
-       <property name="orientation"><enum>Qt::Horizontal</enum></property>
-       <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
-       <property name="sizeHint" stdset="0"><size><width>10</width><height>20</height></size></property>
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeType">
+        <enum>QSizePolicy::Policy::Fixed</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>10</width>
+         <height>20</height>
+        </size>
+       </property>
       </spacer>
      </item>
      <item>
-      <widget class="QLabel" name="lblBus"><property name="text"><string>Bus:</string></property></widget>
+      <widget class="QLabel" name="lblView">
+       <property name="text">
+        <string>View</string>
+       </property>
+      </widget>
      </item>
      <item>
-      <widget class="QComboBox" name="busCombo"/>
-     </item>
-     <item>
-      <spacer name="spacerB">
-       <property name="orientation"><enum>Qt::Horizontal</enum></property>
-       <property name="sizeType"><enum>QSizePolicy::Fixed</enum></property>
-       <property name="sizeHint" stdset="0"><size><width>10</width><height>20</height></size></property>
-      </spacer>
-     </item>
-     <item>
-      <widget class="QLabel" name="lblDisplay"><property name="text"><string>Display:</string></property></widget>
-     </item>
-     <item>
-      <widget class="QComboBox" name="displayCombo"/>
+      <widget class="QComboBox" name="cmbView"/>
      </item>
      <item>
       <spacer name="spacerFill">
-       <property name="orientation"><enum>Qt::Horizontal</enum></property>
-       <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
       </spacer>
      </item>
      <item>
       <widget class="QPushButton" name="btnColumns">
-       <property name="text"><string>☷ Columns</string></property>
+       <property name="text">
+        <string>☷ Columns</string>
+       </property>
       </widget>
      </item>
     </layout>
    </item>
    <item>
     <widget class="QTableWidget" name="msgTable">
-     <property name="showGrid"><bool>false</bool></property>
-     <property name="alternatingRowColors"><bool>true</bool></property>
-     <property name="selectionBehavior"><enum>QAbstractItemView::SelectRows</enum></property>
-     <property name="columnCount"><number>8</number></property>
-     <attribute name="verticalHeaderVisible"><bool>false</bool></attribute>
-     <column><property name="text"><string>Time</string></property></column>
-     <column><property name="text"><string>Bus</string></property></column>
-     <column><property name="text"><string>ID / Src</string></property></column>
-     <column><property name="text"><string>Name</string></property></column>
-     <column><property name="text"><string>DLC</string></property></column>
-     <column><property name="text"><string>Data</string></property></column>
-     <column><property name="text"><string>Length</string></property></column>
-     <column><property name="text"><string>ECU</string></property></column>
+     <property name="alternatingRowColors">
+      <bool>true</bool>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
+     </property>
+     <property name="showGrid">
+      <bool>false</bool>
+     </property>
+     <property name="columnCount">
+      <number>8</number>
+     </property>
+     <attribute name="verticalHeaderVisible">
+      <bool>false</bool>
+     </attribute>
+     <column>
+      <property name="text">
+       <string>Time</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Bus</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>ID / Src</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Name</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>DLC</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Data</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Length</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>ECU</string>
+      </property>
+     </column>
     </widget>
    </item>
   </layout>

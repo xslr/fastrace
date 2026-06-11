@@ -16,7 +16,7 @@ MainWindow::MainWindow(QWidget *parent)
 {
   setWindowTitle("AutoTrace Analyzer");
   resize(1400, 900);
-
+  #if 0
   setStyleSheet(R"(
       QMainWindow { background-color: #181921; color: #dcdcdc; }
       QWidget { background-color: #181921; color: #dcdcdc;
@@ -70,6 +70,7 @@ MainWindow::MainWindow(QWidget *parent)
                                       border-radius: 6px; margin: 2px; }
       QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
   )");
+  #endif
 
   // Top bar (shown above central widget via setMenuWidget)
   m_topBar = new TopBarWidget;
@@ -110,9 +111,7 @@ MainWindow::MainWindow(QWidget *parent)
 
   // Status bar
   auto *statusBar = new QStatusBar;
-  statusBar->setStyleSheet(
-      "background-color: #181921; border-top: 1px solid #272a35;"
-      " color: #8b8b99; padding: 4px;");
+
   statusBar->addWidget(
       new QLabel("🟢 Trace Loaded     12,358 messages     18 ECUs     No Filters"));
   statusBar->addPermanentWidget(
