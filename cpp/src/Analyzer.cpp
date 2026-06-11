@@ -189,6 +189,15 @@ static void parseTransport(const char* frame, size_t frameLen) {
 static bool findNextLobj(Cursor& cursor, uint32_t& sigOut);
 std::string_view objectTypeName(uint32_t t);
 
+// Convert a BLF object timestamp to microseconds.
+// BlfObjectHeader::flags bits: 0x1 = TEN_MICS (10 µs/tick), 0x2 = ONE_NANS (1 ns/tick).
+// Default (no flag): 100 ns/tick.
+static uint64_t tsToMicroseconds(uint64_t ts, uint32_t flags) noexcept {
+  if (flags & 0x2u) return ts / 1000u;   // 1 ns ticks
+  if (flags & 0x1u) return ts * 10u;     // 10 µs ticks
+  return ts / 10u;                        // 100 ns ticks (default)
+}
+
 static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen,
                                 std::unordered_map<uint32_t, uint64_t>& counts,
                                 uint64_t& splitCount,
@@ -245,11 +254,20 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
     // for type-1 headers, or may differ for type-2/3.  We read exactly
     // (headerSize - sizeof(BlfObjectHeaderBase)) bytes of extra header,
     // then the remaining payload is (objectSize - headerSize) bytes.
+    uint64_t timestamp = 0;
+    uint32_t objFlags  = 0;
     const size_t extraHdrBytes = base.headerSize > sizeof(BlfObjectHeaderBase)
         ? base.headerSize - sizeof(BlfObjectHeaderBase)
         : 0;
-    if (extraHdrBytes > 0) {
-      // Peek past the extended header without copying
+    if (self->collectMessages && extraHdrBytes >= sizeof(BlfObjectHeader)) {
+      BlfObjectHeader extHdr;
+      if (!cur.read(&extHdr, sizeof(BlfObjectHeader))) break;
+      timestamp = extHdr.timestamp;
+      objFlags  = extHdr.flags;
+      const size_t remaining = extraHdrBytes - sizeof(BlfObjectHeader);
+      if (remaining > 0 && !cur.skip(remaining)) break;
+    } else if (extraHdrBytes > 0) {
+      // Benchmark / non-collection path: skip without copying.
       if (!cur.skip(extraHdrBytes)) break;
     }
 
@@ -283,6 +301,22 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           spdlog::debug("CAN ch={} id=0x{:x}{} dlc={} data: {}",
                         msg.channel, arbId, ext ? "x" : "", msg.dlc, hex);
         }
+        if (self->collectMessages) {
+          const uint32_t rawId = msg.id;
+          const bool     ext   = (rawId >> 31) & 1u;
+          TraceMessage tm;
+          tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
+          tm.objectType  = base.objectType;
+          tm.channel     = msg.channel;
+          tm.arbId       = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          tm.extendedId  = ext;
+          tm.dlc         = msg.dlc;
+          tm.dataLen     = std::min(msg.dlc, uint8_t{8});
+          std::memcpy(tm.data, msg.data, tm.dataLen);
+          std::lock_guard<std::mutex> lk(self->messagesMu);
+          if (self->messages.size() < self->maxMessages)
+            self->messages.push_back(std::move(tm));
+        }
         break;
       }
 
@@ -307,6 +341,18 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           spdlog::debug("ETH ch={} dir={} paylen={} frame: {}",
                         eth.channel, eth.direction, eth.payloadLength, hex);
           parseTransport(frameData, frameLen);
+        }
+        if (self->collectMessages) {
+          TraceMessage tm;
+          tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
+          tm.objectType  = base.objectType;
+          tm.channel     = eth.channel;
+          tm.dlc         = 0;
+          tm.dataLen     = static_cast<uint8_t>(std::min(frameLen, size_t{64}));
+          std::memcpy(tm.data, frameData, tm.dataLen);
+          std::lock_guard<std::mutex> lk(self->messagesMu);
+          if (self->messages.size() < self->maxMessages)
+            self->messages.push_back(std::move(tm));
         }
         break;
       }
@@ -334,6 +380,23 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
             hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[i]));
           spdlog::debug("CAN_FD ch={} id=0x{:x}{} dlc={} len={} data: {}",
                         msg.channel, arbId, ext ? "x" : "", msg.dlc, msg.validDataBytes, hex);
+        }
+        if (self->collectMessages) {
+          const uint32_t rawId = msg.arbId;
+          const bool     ext   = (rawId >> 31) & 1u;
+          const size_t   dlen  = std::min({static_cast<size_t>(msg.validDataBytes), dataAvail, size_t{64}});
+          TraceMessage tm;
+          tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
+          tm.objectType  = base.objectType;
+          tm.channel     = msg.channel;
+          tm.arbId       = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          tm.extendedId  = ext;
+          tm.dlc         = msg.dlc;
+          tm.dataLen     = static_cast<uint8_t>(dlen);
+          std::memcpy(tm.data, dataPtr, dlen);
+          std::lock_guard<std::mutex> lk(self->messagesMu);
+          if (self->messages.size() < self->maxMessages)
+            self->messages.push_back(std::move(tm));
         }
         break;
       }
@@ -368,6 +431,26 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                         +msg.channel, arbId, ext ? "x" : "", msg.dlc, msg.validDataBytes,
                         brs, edl, hex);
         }
+        if (self->collectMessages) {
+          const uint32_t rawId = msg.arbId;
+          const bool     ext   = (rawId >> 31) & 1u;
+          const size_t   skip  = msg.extDataOffset;
+          const size_t   dlen  = (dataAvail > skip)
+              ? std::min({static_cast<size_t>(msg.validDataBytes), dataAvail - skip, size_t{64}})
+              : 0;
+          TraceMessage tm;
+          tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
+          tm.objectType  = base.objectType;
+          tm.channel     = msg.channel;
+          tm.arbId       = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
+          tm.extendedId  = ext;
+          tm.dlc         = msg.dlc;
+          tm.dataLen     = static_cast<uint8_t>(dlen);
+          if (dlen > 0) std::memcpy(tm.data, dataPtr + skip, dlen);
+          std::lock_guard<std::mutex> lk(self->messagesMu);
+          if (self->messages.size() < self->maxMessages)
+            self->messages.push_back(std::move(tm));
+        }
         break;
       }
 
@@ -392,6 +475,18 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           spdlog::debug("ETH_EX ch={} dir={} paylen={} frame: {}",
                         eth.channel, eth.dir, eth.payloadLen, hex);
           parseTransport(frameData, frameLen);
+        }
+        if (self->collectMessages) {
+          TraceMessage tm;
+          tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
+          tm.objectType  = base.objectType;
+          tm.channel     = eth.channel;
+          tm.dlc         = 0;
+          tm.dataLen     = static_cast<uint8_t>(std::min(frameLen, size_t{64}));
+          std::memcpy(tm.data, frameData, tm.dataLen);
+          std::lock_guard<std::mutex> lk(self->messagesMu);
+          if (self->messages.size() < self->maxMessages)
+            self->messages.push_back(std::move(tm));
         }
         break;
       }
@@ -936,6 +1031,13 @@ void Analyzer::processFile(const std::string& filename) {
   runPipeline(this, cursor, *fileHeader, nWorkers);
   this->perf.pipelineUs = std::chrono::duration_cast<std::chrono::microseconds>(
       Clock::now() - t0).count();
+
+  if (collectMessages && !messages.empty()) {
+    std::sort(messages.begin(), messages.end(),
+              [](const TraceMessage& a, const TraceMessage& b) {
+                return a.timestampUs < b.timestampUs;
+              });
+  }
 }
 
 

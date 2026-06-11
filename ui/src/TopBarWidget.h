@@ -16,6 +16,9 @@ signals:
     void speedChanged(const QString &speed);
     void traceFileChanged(const QString &path);
 
+private slots:
+    void onBtnOpenClicked();
+
 private:
     Ui::TopBarWidget *ui;
 };

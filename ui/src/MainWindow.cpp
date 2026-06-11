@@ -80,6 +80,8 @@ MainWindow::MainWindow(QWidget *parent)
   m_leftPanel      = new LeftPanelWidget;
   m_timeline       = new TimelineWidget;
   m_messageList    = new MessageListWidget;
+  connect(m_topBar, &TopBarWidget::traceFileChanged,
+          m_messageList, &MessageListWidget::loadFile);
   m_messageDetails = new MessageDetailsWidget;
   m_scriptEditor   = new ScriptEditorWidget;
   m_preview        = new AnalyzerPreviewWidget;

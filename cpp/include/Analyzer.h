@@ -1,7 +1,10 @@
 #pragma once
 
+#include "TraceMessage.h"
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 #include <string_view>
 
@@ -21,10 +24,14 @@ std::string_view objectTypeName(uint32_t t);
 
 class Analyzer {
 public:
-  bool skipDecompress = false;
-  bool dumpObjContents = false;
+  bool   skipDecompress  = false;
+  bool   dumpObjContents = false;
+  bool   collectMessages = false;
+  size_t maxMessages     = 100'000;
 
   PerfCounters perf;
+  std::vector<TraceMessage> messages;
+  std::mutex messagesMu;
 
   void processFile(const std::string& filename);
 };
