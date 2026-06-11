@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #endif
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <spdlog/spdlog.h>
