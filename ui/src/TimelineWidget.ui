@@ -3,45 +3,72 @@
  <class>TimelineWidget</class>
  <widget class="QWidget" name="TimelineWidget">
   <property name="geometry">
-   <rect><x>0</x><y>0</y><width>750</width><height>400</height></rect>
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>750</width>
+    <height>400</height>
+   </rect>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
-   <property name="leftMargin"><number>16</number></property>
-   <property name="topMargin"><number>16</number></property>
-   <property name="rightMargin"><number>16</number></property>
-   <property name="bottomMargin"><number>16</number></property>
+   <property name="leftMargin">
+    <number>16</number>
+   </property>
+   <property name="topMargin">
+    <number>16</number>
+   </property>
+   <property name="rightMargin">
+    <number>16</number>
+   </property>
+   <property name="bottomMargin">
+    <number>16</number>
+   </property>
    <item>
     <layout class="QHBoxLayout" name="headerLayout">
      <item>
       <widget class="QLabel" name="timelineHeader">
-       <property name="text"><string>TIMELINE</string></property>
+       <property name="text">
+        <string>TIMELINE</string>
+       </property>
       </widget>
      </item>
      <item>
       <widget class="QPushButton" name="btnAnomalies">
-       <property name="text"><string>⚠ Anomalies</string></property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="btnMessages">
-       <property name="text"><string>☑ Messages</string></property>
+       <property name="text">
+        <string>⚠ Anomalies</string>
+       </property>
       </widget>
      </item>
      <item>
       <widget class="QPushButton" name="btnBookmarks">
-       <property name="text"><string>🔖 Bookmarks</string></property>
+       <property name="text">
+        <string>🔖 Bookmarks</string>
+       </property>
       </widget>
      </item>
      <item>
       <spacer name="headerSpacer">
-       <property name="orientation"><enum>Qt::Horizontal</enum></property>
-       <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
       </spacer>
      </item>
     </layout>
    </item>
    <item>
     <widget class="QLabel" name="graphPlaceholder">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+       <horstretch>0</horstretch>
+       <verstretch>1</verstretch>
+      </sizepolicy>
+     </property>
      <property name="text">
       <string>[ Timeline Graphs Component Placeholder ]
 
@@ -51,12 +78,8 @@
 - VehicleSpeed (km/h)
 - BatteryVoltage (V)</string>
      </property>
-     <property name="alignment"><set>Qt::AlignCenter</set></property>
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-       <horstretch>0</horstretch>
-       <verstretch>1</verstretch>
-      </sizepolicy>
+     <property name="alignment">
+      <set>Qt::AlignmentFlag::AlignCenter</set>
      </property>
     </widget>
    </item>

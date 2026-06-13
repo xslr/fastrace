@@ -74,6 +74,9 @@ RecentFiles::RecentFiles(std::string dbPath)
         "CREATE TABLE IF NOT EXISTS recent_files ("
         "  path      TEXT PRIMARY KEY,"
         "  opened_at INTEGER NOT NULL DEFAULT 0"
+        ");"
+        "CREATE TABLE IF NOT EXISTS active_files ("
+        "  path TEXT PRIMARY KEY"
         ");";
 
     char* errMsg = nullptr;
@@ -146,4 +149,52 @@ std::vector<RecentFileEntry> RecentFiles::getRecent(int limit) const {
     return result;
 }
 
+void RecentFiles::setActive(const std::string& path, bool active) {
+    if (!impl_->db) return;
+
+    sqlite3_stmt* stmt = nullptr;
+    if (active) {
+        const char* sql = "INSERT OR REPLACE INTO active_files (path) VALUES (?);";
+        if (sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        } else {
+            spdlog::error("RecentFiles: setActive(true) prepare failed: {}",
+                          sqlite3_errmsg(impl_->db));
+        }
+    } else {
+        const char* sql = "DELETE FROM active_files WHERE path = ?;";
+        if (sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        } else {
+            spdlog::error("RecentFiles: setActive(false) prepare failed: {}",
+                          sqlite3_errmsg(impl_->db));
+        }
+    }
+}
+
+std::vector<std::string> RecentFiles::getActivePaths() const {
+    std::vector<std::string> result;
+    if (!impl_->db) return result;
+
+    sqlite3_stmt* stmt = nullptr;
+    const char* sql = "SELECT path FROM active_files;";
+    if (sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
+        spdlog::error("RecentFiles: getActivePaths prepare failed: {}",
+                      sqlite3_errmsg(impl_->db));
+        return result;
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        if (raw) result.emplace_back(raw);
+    }
+    sqlite3_finalize(stmt);
+    return result;
+}
+
 } // namespace fastrace
+

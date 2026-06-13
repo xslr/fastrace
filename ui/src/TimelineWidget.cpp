@@ -8,7 +8,7 @@ TimelineWidget::TimelineWidget(QWidget *parent)
 
     ui->timelineHeader->setObjectName("headerLabel");
 
-    for (auto *btn : {ui->btnAnomalies, ui->btnMessages, ui->btnBookmarks})
+    for (auto *btn : {ui->btnAnomalies, ui->btnBookmarks})
         btn->setObjectName("iconBtn");
 }
 

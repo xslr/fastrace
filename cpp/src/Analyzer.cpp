@@ -290,7 +290,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (surplus > 0) cur.skip(surplus);
 
         ++counts[base.objectType];
-        if (self->dumpObjContents) {
+        //if (self->dumpObjContents)
+        {
           const uint32_t rawId = msg.id;
           const bool     ext   = (rawId >> 31) & 1;
           const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
@@ -333,7 +334,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
-        if (self->dumpObjContents) {
+        //if (self->dumpObjContents)
+        {
           const size_t dumpLen = std::min(frameLen, size_t{20});
           std::string hex; hex.reserve(dumpLen * 3);
           for (size_t i = 0; i < dumpLen; ++i)
@@ -370,7 +372,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (dataAvail > 0) cur.skip(dataAvail);
 
         ++counts[base.objectType];
-        if (self->dumpObjContents) {
+        //if (self->dumpObjContents)
+        {
           const uint32_t rawId = msg.arbId;
           const bool     ext   = (rawId >> 31) & 1;
           const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
@@ -414,7 +417,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (dataAvail > 0) cur.skip(dataAvail);
 
         ++counts[base.objectType];
-        if (self->dumpObjContents) {
+        //if (self->dumpObjContents)
+        {
           const uint32_t rawId = msg.arbId;
           const bool     ext   = (rawId >> 31) & 1;
           const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
@@ -467,7 +471,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
-        if (self->dumpObjContents) {
+        //if (self->dumpObjContents)
+        {
           const size_t dumpLen = std::min(frameLen, size_t{20});
           std::string hex; hex.reserve(dumpLen * 3);
           for (size_t i = 0; i < dumpLen; ++i)

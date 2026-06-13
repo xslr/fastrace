@@ -31,6 +31,14 @@ public:
     // Performs a live stat() per entry for size and mtime.
     std::vector<RecentFileEntry> getRecent(int limit = 10) const;
 
+    // Active-file persistence (separate `active_files` table).
+    // setActive(path, true)  — inserts path into active set.
+    // setActive(path, false) — removes path from active set.
+    void setActive(const std::string& path, bool active);
+
+    // Returns all paths currently stored in the active_files table.
+    std::vector<std::string> getActivePaths() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
