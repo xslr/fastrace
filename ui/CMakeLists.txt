@@ -31,26 +31,21 @@ add_executable(fastrace_ui
     # ── Shared timeline ───────────────────────────────────────────────────────
     src/TimelineWidget.cpp
     src/TimelineWidget.h
-    src/TimelineWidget.ui
 
     # ── Shared message list ───────────────────────────────────────────────────
     src/MessageListWidget.cpp
     src/MessageListWidget.h
-    src/MessageListWidget.ui
 
     # ── Overview-exclusive widgets ────────────────────────────────────────────
     src/MessageDetailsWidget.cpp
     src/MessageDetailsWidget.h
-    src/MessageDetailsWidget.ui
 
     src/DetectionsWidget.cpp
     src/DetectionsWidget.h
-    src/DetectionsWidget.ui
 
     # ── Notebook-exclusive widgets ────────────────────────────────────────────
     src/ScriptEditorWidget.cpp
     src/ScriptEditorWidget.h
-    src/ScriptEditorWidget.ui
 
     # ── Notebook block wrapper ────────────────────────────────────────────────
     src/NotebookBlockWidget.cpp
