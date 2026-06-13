@@ -1,9 +1,7 @@
 #include "MessageListWidget.h"
 #include "ui_MessageListWidget.h"
-#include <QApplication>
 #include <QHeaderView>
 #include <QTableWidgetItem>
-#include "Analyzer.h"
 #include "BlfTypes.h"
 
 MessageListWidget::MessageListWidget(QWidget *parent)
@@ -60,22 +58,14 @@ void MessageListWidget::populateTable()
     }
 }
 
-void MessageListWidget::loadFile(const QString& path)
+void MessageListWidget::populateFrom(const std::vector<fastrace::TraceMessage>& messages)
 {
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-
-    fastrace::Analyzer analyzer;
-    analyzer.collectMessages = true;
-    analyzer.processFile(path.toStdString());
-
-    QApplication::restoreOverrideCursor();
-
     QTableWidget* t = ui->msgTable;
     t->setRowCount(0);
-    t->setRowCount(static_cast<int>(analyzer.messages.size()));
+    t->setRowCount(static_cast<int>(messages.size()));
 
     for (int r = 0; r < t->rowCount(); ++r) {
-        const fastrace::TraceMessage& msg = analyzer.messages[r];
+        const fastrace::TraceMessage& msg = messages[r];
 
         // Time: HH:MM:SS.microseconds
         const uint64_t us   = msg.timestampUs;
@@ -130,4 +120,9 @@ void MessageListWidget::loadFile(const QString& path)
 
     ui->msgTable->resizeColumnsToContents();
     ui->msgTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+}
+
+void MessageListWidget::clearTable()
+{
+    ui->msgTable->setRowCount(0);
 }

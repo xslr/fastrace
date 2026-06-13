@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <mutex>
 #include <condition_variable>
@@ -11,13 +12,17 @@ struct WorkQueue {
   explicit WorkQueue(size_t cap);
 
   // Called by producer.  Blocks if the queue is full.
-  void push(Item item);
+  // Returns false (without pushing) if `cancelled` becomes true while waiting.
+  bool push(Item item, const std::atomic<bool>& cancelled);
 
   // Called by consumers.  Returns nullopt when closed AND empty.
   std::optional<Item> pop();
 
   // Signal that no more items will be pushed.  Wakes all waiting consumers.
   void close();
+
+  // Wake a blocked producer so it can re-check the cancelled flag.
+  void wakeProducer();
 
 private:
   const size_t             cap_;

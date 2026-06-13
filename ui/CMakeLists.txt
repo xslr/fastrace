@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 project(fastrace_ui LANGUAGES CXX)
 
 # Support Qt6
-find_package(QT NAMES Qt6 COMPONENTS Widgets REQUIRED)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
+find_package(QT NAMES Qt6 COMPONENTS Widgets Concurrent REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets Concurrent REQUIRED)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
@@ -69,7 +69,7 @@ qt_add_ui( fastrace_ui SOURCES
 )
 
 
-target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets fastrace_analyzer)
+target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent fastrace_analyzer)
 
 # ui/src/ must be on the include path so that the AUTOUIC-generated
 # ui_TopBarWidget.h can find promoted-widget headers (e.g. DatabaseComboBox.h).

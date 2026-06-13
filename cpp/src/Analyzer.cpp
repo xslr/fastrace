@@ -315,8 +315,10 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           tm.dataLen     = std::min(msg.dlc, uint8_t{8});
           std::memcpy(tm.data, msg.data, tm.dataLen);
           std::lock_guard<std::mutex> lk(self->messagesMu);
-          if (self->messages.size() < self->maxMessages)
+          if (self->messages.size() < self->maxMessages) {
             self->messages.push_back(std::move(tm));
+            self->messagesCollected.fetch_add(1, std::memory_order_relaxed);
+          }
         }
         break;
       }
@@ -353,8 +355,10 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           tm.dataLen     = static_cast<uint8_t>(std::min(frameLen, size_t{64}));
           std::memcpy(tm.data, frameData, tm.dataLen);
           std::lock_guard<std::mutex> lk(self->messagesMu);
-          if (self->messages.size() < self->maxMessages)
+          if (self->messages.size() < self->maxMessages) {
             self->messages.push_back(std::move(tm));
+            self->messagesCollected.fetch_add(1, std::memory_order_relaxed);
+          }
         }
         break;
       }
@@ -398,8 +402,10 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           tm.dataLen     = static_cast<uint8_t>(dlen);
           std::memcpy(tm.data, dataPtr, dlen);
           std::lock_guard<std::mutex> lk(self->messagesMu);
-          if (self->messages.size() < self->maxMessages)
+          if (self->messages.size() < self->maxMessages) {
             self->messages.push_back(std::move(tm));
+            self->messagesCollected.fetch_add(1, std::memory_order_relaxed);
+          }
         }
         break;
       }
@@ -452,8 +458,10 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           tm.dataLen     = static_cast<uint8_t>(dlen);
           if (dlen > 0) std::memcpy(tm.data, dataPtr + skip, dlen);
           std::lock_guard<std::mutex> lk(self->messagesMu);
-          if (self->messages.size() < self->maxMessages)
+          if (self->messages.size() < self->maxMessages) {
             self->messages.push_back(std::move(tm));
+            self->messagesCollected.fetch_add(1, std::memory_order_relaxed);
+          }
         }
         break;
       }
@@ -490,8 +498,10 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
           tm.dataLen     = static_cast<uint8_t>(std::min(frameLen, size_t{64}));
           std::memcpy(tm.data, frameData, tm.dataLen);
           std::lock_guard<std::mutex> lk(self->messagesMu);
-          if (self->messages.size() < self->maxMessages)
+          if (self->messages.size() < self->maxMessages) {
             self->messages.push_back(std::move(tm));
+            self->messagesCollected.fetch_add(1, std::memory_order_relaxed);
+          }
         }
         break;
       }
@@ -895,14 +905,17 @@ static void runConsumer(Analyzer* self, WorkQueue& queue,
 
 // ---------------------------------------------------------------------------
 // runProducer – scan mmap'd file sequentially, push payload to work queue.
+// Checks self->cancelled on every iteration; also passes it to queue.push()
+// so a blocked push unblocks immediately when cancellation is requested.
+// Updates self->bytesRead after each container push for UI progress polling.
 // ---------------------------------------------------------------------------
-static void runProducer(Cursor cursor, WorkQueue& queue) {
+static void runProducer(Analyzer* self, Cursor cursor, WorkQueue& queue) {
   using Clock = std::chrono::steady_clock;
   auto prodStart = Clock::now();
   uint64_t containerIdx = 0;
 
   BlfObjectHeaderBase base;
-  while (!cursor.eof()) {
+  while (!cursor.eof() && !self->cancelled.load(std::memory_order_relaxed)) {
     // seek to start of next object and read it
     if (!findNextLobj(cursor, base.signature)) break;
     if (!cursor.read(reinterpret_cast<char*>(&base) + 4,
@@ -920,7 +933,11 @@ static void runProducer(Cursor cursor, WorkQueue& queue) {
       const char* compData = cursor.peek(compSize);
       if (!compData) break;
 
-      queue.push({compData, compSize, containerIdx++});  // blocks if consumers are behind
+      // push returns false if cancelled while blocked – exit the loop
+      if (!queue.push({compData, compSize, containerIdx++}, self->cancelled)) break;
+
+      // update progress for UI polling
+      self->bytesRead.store(cursor.tell(), std::memory_order_relaxed);
     } else {
       // Skip non-CONTAINER object payload
       const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
@@ -997,7 +1014,7 @@ static void runPipeline(Analyzer* self, Cursor cursor, const BlfFileHeader& hdr,
   // ---- Producer (runs on calling thread, concurrent with consumers) ----
   // MADV_WILLNEED (set in MappedFile::open) has been pre-loading pages since
   // mmap returned, so many of these touches will hit the page cache.
-  runProducer(cursor, queue);
+  runProducer(self, cursor, queue);
 
   queue.close();  // this tells consumers that no more items will be pushed
   for (auto& w : consumers) w.join();
@@ -1024,6 +1041,10 @@ void Analyzer::processFile(const std::string& filename) {
   MappedFile mf;
   if (!mf.open(filename)) return;
   spdlog::info("Processing file: {} ({:.2f} MiB)", filename, mf.size / (1024.0 * 1024.0));
+
+  // expose file size for UI progress bar before the pipeline starts
+  totalBytes.store(mf.size, std::memory_order_relaxed);
+  bytesRead.store(0, std::memory_order_relaxed);
 
   Cursor cursor = mf.cursor();
   auto fileHeader = readFileHeader(cursor);
