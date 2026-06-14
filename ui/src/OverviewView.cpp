@@ -48,6 +48,9 @@ OverviewView::OverviewView(TimelineWidget       *sharedTimeline,
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_mainSplitter);
+
+    connect(m_messageList, &MessageListWidget::messageSelected,
+            m_messageDetails, &MessageDetailsWidget::updateFromMessage);
 }
 
 void OverviewView::activate()

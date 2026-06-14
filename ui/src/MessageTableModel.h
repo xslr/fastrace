@@ -4,6 +4,7 @@
 #include <QVector>
 #include <map>
 #include <set>
+#include <optional>
 #include <memory>
 #include "Analyzer.h"
 #include "TraceMessage.h"
@@ -20,6 +21,8 @@ public:
     int columnCount(const QModelIndex& parent = QModelIndex()) const override;
     QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const override;
+
+    std::optional<fastrace::TraceMessage> getMessage(int row) const;
 
 signals:
     void chunkDecodeRequested(size_t chunkIndex) const; // Needs to be const if emitted from data()

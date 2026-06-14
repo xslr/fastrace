@@ -20,6 +20,9 @@ MessageListWidget::MessageListWidget(QWidget *parent)
     // Set fixed row height for performance
     ui->msgTable->verticalHeader()->setDefaultSectionSize(24);
     ui->msgTable->verticalHeader()->hide(); // Usually we hide row headers if we use our own ID/Index
+
+    connect(ui->msgTable->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, &MessageListWidget::onSelectionChanged);
 }
 
 MessageListWidget::~MessageListWidget()
@@ -43,4 +46,15 @@ void MessageListWidget::populateFrom(const std::vector<fastrace::TraceMessage>& 
 void MessageListWidget::clearTable()
 {
     m_model->clear();
+}
+
+void MessageListWidget::onSelectionChanged()
+{
+    QModelIndexList selectedRows = ui->msgTable->selectionModel()->selectedRows();
+    if (!selectedRows.isEmpty()) {
+        int row = selectedRows.first().row();
+        if (auto msgOpt = m_model->getMessage(row)) {
+            emit messageSelected(*msgOpt);
+        }
+    }
 }

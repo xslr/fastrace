@@ -135,77 +135,16 @@
           </widget>
          </item>
          <item>
-          <widget class="QLabel" name="hexDataLabel">
-           <property name="text">
-            <string>-</string>
+          <widget class="QPlainTextEdit" name="hexDataEdit">
+           <property name="font">
+            <font>
+             <family>Consolas</family>
+             <pointsize>10</pointsize>
+            </font>
            </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <layout class="QVBoxLayout" name="col3Layout">
-         <property name="leftMargin">
-          <number>0</number>
-         </property>
-         <property name="topMargin">
-          <number>0</number>
-         </property>
-         <property name="rightMargin">
-          <number>0</number>
-         </property>
-         <property name="bottomMargin">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QLabel" name="signalsHeader">
-           <property name="text">
-            <string>Decoded Signals</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QTableWidget" name="signalsTable">
-           <property name="alternatingRowColors">
+           <property name="readOnly">
             <bool>true</bool>
            </property>
-           <property name="selectionBehavior">
-            <enum>QAbstractItemView::SelectionBehavior::SelectRows</enum>
-           </property>
-           <property name="showGrid">
-            <bool>false</bool>
-           </property>
-           <property name="columnCount">
-            <number>5</number>
-           </property>
-           <attribute name="verticalHeaderVisible">
-            <bool>false</bool>
-           </attribute>
-           <column>
-            <property name="text">
-             <string>Signal</string>
-            </property>
-           </column>
-           <column>
-            <property name="text">
-             <string>Value</string>
-            </property>
-           </column>
-           <column>
-            <property name="text">
-             <string>Unit</string>
-            </property>
-           </column>
-           <column>
-            <property name="text">
-             <string>Start Bit</string>
-            </property>
-           </column>
-           <column>
-            <property name="text">
-             <string>Length</string>
-            </property>
-           </column>
           </widget>
          </item>
         </layout>

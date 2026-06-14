@@ -28,6 +28,13 @@ public slots:
     void clearTable();
 
     void attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer);
+
+signals:
+    void messageSelected(const fastrace::TraceMessage& msg);
+
+private slots:
+    void onSelectionChanged();
+
 private:
     Ui::MessageListWidget *ui;
     MessageTableModel *m_model;

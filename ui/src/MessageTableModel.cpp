@@ -204,3 +204,31 @@ void MessageTableModel::onChunkDecoded(size_t chunkIndex, QVector<fastrace::Trac
     
     emit dataChanged(index(startRow, 0), index(endRow, columnCount() - 1));
 }
+
+std::optional<fastrace::TraceMessage> MessageTableModel::getMessage(int row) const
+{
+    if (row < 0 || !m_analyzer) return std::nullopt;
+
+    size_t urow = static_cast<size_t>(row);
+    size_t chunkIndex = urow / fastrace::Analyzer::CHUNK_SIZE;
+    size_t inChunkIdx = urow % fastrace::Analyzer::CHUNK_SIZE;
+
+    auto it = m_cache.find(chunkIndex);
+    if (it == m_cache.end()) {
+        // If not cached, we could synchronously decode it, or request async and return nullopt.
+        // Since selection usually happens after rendering, it should be cached.
+        // If not, we'll request decode and it will arrive later, but returning nullopt for now.
+        if (m_pending.find(chunkIndex) == m_pending.end()) {
+            m_pending.insert(chunkIndex);
+            emit chunkDecodeRequested(chunkIndex);
+        }
+        return std::nullopt;
+    }
+
+    const auto& chunkMsgs = it->second;
+    if (inChunkIdx >= chunkMsgs.size()) {
+        return std::nullopt;
+    }
+
+    return chunkMsgs[inChunkIdx];
+}
