@@ -180,14 +180,14 @@ void MainWindow::startLoad(const QString& path)
     resetSpeedState();
 
     auto analyzer = std::make_shared<fastrace::Analyzer>();
-    analyzer->collectMessages = true;
+    analyzer->collectMessages = false; // We use lazy loading now
     m_analyzer = analyzer;          // store as current
 
     showLoadingState(QFileInfo(path).fileName());
 
-    // Launch the blocking processFile on a thread pool thread.
+    // Launch the index builder on a thread pool thread.
     auto future = QtConcurrent::run([analyzer, path]() {
-        analyzer->processFile(path.toStdString());
+        analyzer->buildIndex(path.toStdString());
     });
 
     m_watcher->setFuture(future);
@@ -244,6 +244,12 @@ void MainWindow::onLoadFinished()
         return;
     }
 
+    if (m_analyzer->totalMessages() == 0) {
+        m_progressBar->setVisible(false);
+        m_statusLabel->setText("Failed to load trace or file is empty");
+        return;
+    }
+
     // Take a final speed snapshot before zeroing state.
     const size_t currentCount = m_analyzer->messagesCollected.load(std::memory_order_relaxed);
     const size_t finalDelta = currentCount - m_prevMsgCount;
@@ -253,12 +259,11 @@ void MainWindow::onLoadFinished()
     for (int i = 0; i < filled; ++i) sum += m_msgSamples[i];
     const size_t finalSpeed = filled > 0 ? (sum * 10) / static_cast<size_t>(filled) : 0;
 
-    // Populate both views from the shared Analyzer results.
-    const auto& msgs = m_analyzer->messages;
-    m_overviewView->messageList()->populateFrom(msgs);
-    m_notebookView->messageList()->populateFrom(msgs);
+    // Attach the shared Analyzer to the message lists for lazy loading.
+    m_overviewView->messageList()->attachAnalyzer(m_analyzer);
+    m_notebookView->messageList()->attachAnalyzer(m_analyzer);
 
-    showLoadedState(msgs.size(), finalSpeed);
+    showLoadedState(m_analyzer->totalMessages(), finalSpeed);
 }
 
 // ── Status bar helpers ────────────────────────────────────────────────────────

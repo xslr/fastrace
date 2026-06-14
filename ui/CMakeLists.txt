@@ -35,6 +35,8 @@ add_executable(fastrace_ui
     # ── Shared message list ───────────────────────────────────────────────────
     src/MessageListWidget.cpp
     src/MessageListWidget.h
+    src/MessageTableModel.cpp
+    src/MessageTableModel.h
 
     # ── Overview-exclusive widgets ────────────────────────────────────────────
     src/MessageDetailsWidget.cpp
