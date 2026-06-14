@@ -1167,6 +1167,8 @@ struct ContainerCount {
     uint64_t containerIndex;
     size_t fileOffset;
     uint32_t countInContainer;
+    std::vector<char> headFrag;
+    std::vector<char> tailFrag;
 };
 
 static void runIndexConsumer(
@@ -1200,43 +1202,23 @@ static void runIndexConsumer(
         } while (res == LIBDEFLATE_INSUFFICIENT_SPACE);
 
         if (res == LIBDEFLATE_SUCCESS) {
-            Cursor cur { localBuf.data(), localBuf.data() + actualOut, localBuf.data() };
-            BlfObjectHeaderBase base;
+            std::unordered_map<uint32_t, uint64_t> localCounts;
+            uint64_t localSplits = 0;
+            std::vector<char> headFrag, tailFrag;
+
+            processInnerObjects(self, localBuf.data(), actualOut, localCounts, localSplits, &headFrag, &tailFrag);
+
             uint32_t countInContainer = 0;
-
-            while (!cur.eof()) {
-                if (!findNextLobj(cur, base.signature)) {
-                    break;
-                }
-                if (!cur.read(reinterpret_cast<char*>(&base) + 4, sizeof(BlfObjectHeaderBase) - 4)) {
-                    break;
-                }
-
-                const size_t objectStart = cur.tell() - sizeof(BlfObjectHeaderBase);
-                const size_t objectEnd = objectStart + base.objectSize;
-
-                bool isMessage = (base.objectType != LOG_CONTAINER);
-
-                if (isMessage) {
-                    countInContainer++;
-                }
-
-                if (objectEnd > actualOut) {
-                    // Split object: the tail fragment will be skipped by the next
-                    // container's findNextLobj so it's correct to count it in this
-                    // container where the header is located.
-                    break;
-                }
-
-                const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
-                if (!cur.skip(remaining)) {
-                    break;
+            for (const auto& [type, cnt] : localCounts) {
+                if (type != LOG_CONTAINER) {
+                    countInContainer += cnt;
                 }
             }
 
-            // Push even if 0, to track offsets correctly, though 0 is fine.
+            // Push even if 0, to track offsets correctly
             std::lock_guard<std::mutex> lk(countsMu);
-            containerCounts.push_back({ item->containerIndex, item->fileOffset, countInContainer });
+            containerCounts.push_back(
+                { item->containerIndex, item->fileOffset, countInContainer, std::move(headFrag), std::move(tailFrag) });
         }
     }
 }
@@ -1248,7 +1230,7 @@ size_t Analyzer::buildIndex(const std::string& filename)
     if (!mf_.open(filename)) {
         return 0;
     }
-    spdlog::info("Building index for: {} ({:.2f} MiB)", filename, mf_.size / 1048576.0);
+    spdlog::info("Building index for: {} ({:.2f} MiB)", filename, mf_.size / (1024.0 * 1024.0));
 
     totalBytes.store(mf_.size, std::memory_order_relaxed);
     bytesRead.store(0, std::memory_order_relaxed);
@@ -1280,6 +1262,34 @@ size_t Analyzer::buildIndex(const std::string& filename)
     std::sort(containerCounts.begin(), containerCounts.end(),
         [](const ContainerCount& a, const ContainerCount& b) { return a.containerIndex < b.containerIndex; });
 
+    // Stitch
+    for (size_t i = 0; i + 1 < containerCounts.size(); ++i) {
+        auto& tail = containerCounts[i].tailFrag;
+        auto& head = containerCounts[i + 1].headFrag;
+        if (!tail.empty() && !head.empty()) {
+            std::vector<char> stitched;
+            stitched.reserve(tail.size() + head.size());
+            stitched.insert(stitched.end(), tail.begin(), tail.end());
+            stitched.insert(stitched.end(), head.begin(), head.end());
+
+            std::unordered_map<uint32_t, uint64_t> sCounts;
+            uint64_t sSplits = 0;
+            processInnerObjects(this, stitched.data(), stitched.size(), sCounts, sSplits, nullptr, nullptr);
+
+            uint32_t sCount = 0;
+            for (const auto& [type, cnt] : sCounts) {
+                if (type != LOG_CONTAINER) {
+                    sCount += cnt;
+                }
+            }
+            // Add the stitched count to the container that originated the object (the tail)
+            containerCounts[i].countInContainer += sCount;
+        }
+        // Free memory early
+        tail.clear();
+        head.clear();
+    }
+
     chunkIndex_.clear();
     size_t cumulativeMessages = 0;
     size_t nextChunkBoundary = 0;
@@ -1303,8 +1313,7 @@ size_t Analyzer::buildIndex(const std::string& filename)
 
     totalMessages_ = cumulativeMessages;
     auto t1 = Clock::now();
-    spdlog::info("buildIndex done: scanned {} containers, {} messages, {} index "
-                 "chunks in {:.2f} ms",
+    spdlog::info("buildIndex done: scanned {} containers, {} messages, {} index chunks in {:.2f} ms",
         containerCounts.size(), totalMessages_, chunkIndex_.size(),
         std::chrono::duration<double, std::milli>(t1 - t0).count());
 
