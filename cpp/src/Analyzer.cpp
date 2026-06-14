@@ -1049,13 +1049,14 @@ static void runProducer(Analyzer* self, Cursor cursor, WorkQueue& queue)
                 break;
             }
 
+            const size_t fileOffset = cursor.tell() - 32; // LOBJ (4) + base remainder (12) + extHdr (16)
+
             const size_t compSize = base.objectSize - base.headerSize - sizeof(BlfObjectHeader);
             const char* compData = cursor.peek(compSize);
             if (!compData) {
                 break;
             }
 
-            const size_t fileOffset = cursor.tell() - 32; // LOBJ (4) + base remainder (12) + extHdr (16)
             if (!queue.push({ compData, compSize, containerIdx++, fileOffset }, self->cancelled)) {
                 break;
             }
