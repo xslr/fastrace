@@ -208,17 +208,34 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
   BlfObjectHeaderBase base;
   bool firstObject = true;
   while (!cur.eof()) {
-    if (!findNextLobj(cur, base.signature)) break;
+    const char* loopStart = cur.pos;
+
+    if (!findNextLobj(cur, base.signature)) {
+      if (firstObject) {
+        if (headFragOut)
+          headFragOut->assign(data, data + dataLen);
+      } else {
+        if (tailFragOut && loopStart < data + dataLen)
+          tailFragOut->assign(loopStart, data + dataLen);
+      }
+      break;
+    }
 
     if (firstObject) {
       firstObject = false;
       const size_t firstLobjAt = cur.tell() - 4;
-      if (firstLobjAt > 0 && headFragOut)
+      if (headFragOut)
         headFragOut->assign(data, data + firstLobjAt);
     }
 
     if (!cur.read(reinterpret_cast<char*>(&base) + 4,
-                  sizeof(BlfObjectHeaderBase) - 4)) break;
+                  sizeof(BlfObjectHeaderBase) - 4)) {
+      if (tailFragOut) {
+        const char* objStart = cur.pos - 4;
+        tailFragOut->assign(objStart, data + dataLen);
+      }
+      break;
+    }
 
     // -----------------------------------------------------------------------
     // Cross-container split detection.
@@ -290,7 +307,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (surplus > 0) cur.skip(surplus);
 
         ++counts[base.objectType];
-        //if (self->dumpObjContents)
+        if (self->dumpObjContents)
         {
           const uint32_t rawId = msg.id;
           const bool     ext   = (rawId >> 31) & 1;
@@ -323,7 +340,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         break;
       }
 
-      case ETHERNET_FRAME: {
+      case ETHERNET_FRAME_EX: {
         if (payloadBytes < sizeof(EthernetFrameHeader)) {
           spdlog::debug("inner: ETH object too short ({} B)", payloadBytes);
           cur.skip(payloadBytes);
@@ -336,7 +353,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
-        //if (self->dumpObjContents)
+        if (self->dumpObjContents)
         {
           const size_t dumpLen = std::min(frameLen, size_t{20});
           std::string hex; hex.reserve(dumpLen * 3);
@@ -376,7 +393,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (dataAvail > 0) cur.skip(dataAvail);
 
         ++counts[base.objectType];
-        //if (self->dumpObjContents)
+        if (self->dumpObjContents)
         {
           const uint32_t rawId = msg.arbId;
           const bool     ext   = (rawId >> 31) & 1;
@@ -423,7 +440,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (dataAvail > 0) cur.skip(dataAvail);
 
         ++counts[base.objectType];
-        //if (self->dumpObjContents)
+        if (self->dumpObjContents)
         {
           const uint32_t rawId = msg.arbId;
           const bool     ext   = (rawId >> 31) & 1;
@@ -466,7 +483,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         break;
       }
 
-      case ETHERNET_FRAME_EX: {
+      case ETHERNET_FRAME_FORWARDED: {
         if (payloadBytes < sizeof(EthernetFrameExHeader)) {
           spdlog::debug("inner: ETH_EX object too short ({} B)", payloadBytes);
           cur.skip(payloadBytes);
@@ -479,7 +496,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         if (frameLen > 0) cur.skip(frameLen);
 
         ++counts[base.objectType];
-        //if (self->dumpObjContents)
+        if (self->dumpObjContents)
         {
           const size_t dumpLen = std::min(frameLen, size_t{20});
           std::string hex; hex.reserve(dumpLen * 3);
@@ -506,14 +523,28 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
         break;
       }
 
-      case CONTAINER:
+      case LOG_CONTAINER:
         cur.skip(payloadBytes);
         break;
 
-      default:
+      default: {
         if (payloadBytes > 0) cur.skip(payloadBytes);
         ++counts[base.objectType];
+        if (self->collectMessages) {
+          TraceMessage tm;
+          tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
+          tm.objectType  = base.objectType;
+          tm.channel     = 0;
+          tm.dlc         = 0;
+          tm.dataLen     = 0;
+          std::lock_guard<std::mutex> lk(self->messagesMu);
+          if (self->messages.size() < self->maxMessages) {
+            self->messages.push_back(std::move(tm));
+            self->messagesCollected.fetch_add(1, std::memory_order_relaxed);
+          }
+        }
         break;
+      }
     }
   }
 }
@@ -579,34 +610,40 @@ std::string to_hex(uint32_t num) {
 // ---------------------------------------------------------------------------
 // objectTypeName – human-readable label for a BLF object type ID.
 // Returns "UNKNOWN_<n>" for any type not in the table.
+// Based on https://bitbucket.org/tobylorenz/vector_blf
 // ---------------------------------------------------------------------------
 std::string_view objectTypeName(uint32_t t) {
   static const auto names = [] {
     std::array<std::string_view, 256> arr{};
+    arr[UNKNOWN] = "UNKNOWN";
     arr[CAN_MESSAGE] = "CAN_MESSAGE";
     arr[CAN_ERROR] = "CAN_ERROR";
     arr[CAN_OVERLOAD] = "CAN_OVERLOAD";
     arr[CAN_STATISTIC] = "CAN_STATISTIC";
-    arr[APP_TEXT] = "APP_TEXT";
-    arr[CAN_REMOTE_FRAME] = "CAN_REMOTE_FRAME";
+    arr[APP_TRIGGER] = "APP_TRIGGER";
+    arr[ENV_INTEGER] = "ENV_INTEGER";
+    arr[ENV_DOUBLE] = "ENV_DOUBLE";
+    arr[ENV_STRING] = "ENV_STRING";
+    arr[ENV_DATA] = "ENV_DATA";
+    arr[LOG_CONTAINER] = "LOG_CONTAINER";
     arr[LIN_MESSAGE] = "LIN_MESSAGE";
-    arr[CONTAINER] = "CONTAINER";
-    arr[LIN_RX_ERROR] = "LIN_RX_ERROR";
-    arr[LIN_SEND_ERROR] = "LIN_SEND_ERROR";
-    arr[LIN_SLAVE_TIMEOUT] = "LIN_SLAVE_TIMEOUT";
-    arr[LIN_NOANS] = "LIN_NOANS";
-    arr[LIN_WAKEUP] = "LIN_WAKEUP";
-    arr[LIN_SPIKE] = "LIN_SPIKE";
-    arr[LIN_DLCINFO] = "LIN_DLCINFO";
+    arr[LIN_CRC_ERROR] = "LIN_CRC_ERROR";
+    arr[LIN_DLC_INFO] = "LIN_DLC_INFO";
     arr[LIN_RCV_ERROR] = "LIN_RCV_ERROR";
-    arr[LIN_SYNCERROR] = "LIN_SYNCERROR";
+    arr[LIN_SND_ERROR] = "LIN_SND_ERROR";
+    arr[LIN_SLV_TIMEOUT] = "LIN_SLV_TIMEOUT";
+    arr[LIN_SCHED_MODCH] = "LIN_SCHED_MODCH";
+    arr[LIN_SYN_ERROR] = "LIN_SYN_ERROR";
     arr[LIN_BAUDRATE] = "LIN_BAUDRATE";
     arr[LIN_SLEEP] = "LIN_SLEEP";
-    arr[LIN_WAKEUP2] = "LIN_WAKEUP2";
+    arr[LIN_WAKEUP] = "LIN_WAKEUP";
     arr[MOST_SPY] = "MOST_SPY";
     arr[MOST_CTRL] = "MOST_CTRL";
     arr[MOST_LIGHTLOCK] = "MOST_LIGHTLOCK";
     arr[MOST_STATISTIC] = "MOST_STATISTIC";
+    arr[Reserved26] = "Reserved26";
+    arr[Reserved27] = "Reserved27";
+    arr[Reserved28] = "Reserved28";
     arr[FLEXRAY_DATA] = "FLEXRAY_DATA";
     arr[FLEXRAY_SYNC] = "FLEXRAY_SYNC";
     arr[CAN_DRIVER_ERROR] = "CAN_DRIVER_ERROR";
@@ -621,22 +658,39 @@ std::string_view objectTypeName(uint32_t t) {
     arr[FLEXRAY_CYCLE] = "FLEXRAY_CYCLE";
     arr[FLEXRAY_MESSAGE] = "FLEXRAY_MESSAGE";
     arr[LIN_CHECKSUM_INFO] = "LIN_CHECKSUM_INFO";
-    arr[LIN_SPIKE_IGNORE] = "LIN_SPIKE_IGNORE";
-    arr[LIN_WAKEUP_INFO] = "LIN_WAKEUP_INFO";
-    arr[LIN_IN_PROGRESS] = "LIN_IN_PROGRESS";
-    arr[LIN_UNEXPECTED_WAKEUP] = "LIN_UNEXPECTED_WAKEUP";
-    arr[LIN_SHORT_OR_SLOW_RESPONSE] = "LIN_SHORT_OR_SLOW_RESPONSE";
-    arr[LIN_DISTURBANCE_EVENT] = "LIN_DISTURBANCE_EVENT";
-    arr[SERIAL_EVENT] = "SERIAL_EVENT";
-    arr[OVERRUN_ERROR] = "OVERRUN_ERROR";
-    arr[EVENT_COMMENT] = "EVENT_COMMENT";
-    arr[WLAN_FRAME] = "WLAN_FRAME";
-    arr[WLAN_STATISTIC] = "WLAN_STATISTIC";
-    arr[MOST_ECL] = "MOST_ECL";
+    arr[LIN_SPIKE_EVENT] = "LIN_SPIKE_EVENT";
+    arr[CAN_DRIVER_SYNC] = "CAN_DRIVER_SYNC";
+    arr[FLEXRAY_STATUS] = "FLEXRAY_STATUS";
+    arr[GPS_EVENT] = "GPS_EVENT";
+    arr[FR_ERROR] = "FR_ERROR";
+    arr[FR_STATUS] = "FR_STATUS";
+    arr[FR_STARTCYCLE] = "FR_STARTCYCLE";
+    arr[FR_RCVMESSAGE] = "FR_RCVMESSAGE";
+    arr[REALTIMECLOCK] = "REALTIMECLOCK";
+    arr[Reserved52] = "Reserved52";
+    arr[Reserved53] = "Reserved53";
+    arr[LIN_STATISTIC] = "LIN_STATISTIC";
+    arr[J1708_MESSAGE] = "J1708_MESSAGE";
+    arr[J1708_VIRTUAL_MSG] = "J1708_VIRTUAL_MSG";
+    arr[LIN_MESSAGE2] = "LIN_MESSAGE2";
+    arr[LIN_SND_ERROR2] = "LIN_SND_ERROR2";
+    arr[LIN_SYN_ERROR2] = "LIN_SYN_ERROR2";
+    arr[LIN_CRC_ERROR2] = "LIN_CRC_ERROR2";
+    arr[LIN_RCV_ERROR2] = "LIN_RCV_ERROR2";
+    arr[LIN_WAKEUP2] = "LIN_WAKEUP2";
+    arr[LIN_SPIKE_EVENT2] = "LIN_SPIKE_EVENT2";
+    arr[LIN_LONG_DOM_SIG] = "LIN_LONG_DOM_SIG";
+    arr[APP_TEXT] = "APP_TEXT";
+    arr[FR_RCVMESSAGE_EX] = "FR_RCVMESSAGE_EX";
+    arr[MOST_STATISTICEX] = "MOST_STATISTICEX";
+    arr[MOST_TXLIGHT] = "MOST_TXLIGHT";
+    arr[MOST_ALLOCTAB] = "MOST_ALLOCTAB";
+    arr[MOST_STRESS] = "MOST_STRESS";
+    arr[ETHERNET_FRAME] = "ETHERNET_FRAME";
     arr[SYS_VARIABLE] = "SYS_VARIABLE";
     arr[CAN_ERROR_EXT] = "CAN_ERROR_EXT";
     arr[CAN_DRIVER_ERROR_EXT] = "CAN_DRIVER_ERROR_EXT";
-    arr[LIN_LONG_DOM_SIG] = "LIN_LONG_DOM_SIG";
+    arr[LIN_LONG_DOM_SIG2] = "LIN_LONG_DOM_SIG2";
     arr[MOST_150_MESSAGE] = "MOST_150_MESSAGE";
     arr[MOST_150_PKT] = "MOST_150_PKT";
     arr[MOST_ETHERNET_PKT] = "MOST_ETHERNET_PKT";
@@ -648,15 +702,15 @@ std::string_view objectTypeName(uint32_t t) {
     arr[MOST_50_MESSAGE] = "MOST_50_MESSAGE";
     arr[MOST_50_PKT] = "MOST_50_PKT";
     arr[CAN_MESSAGE2] = "CAN_MESSAGE2";
-    arr[LIN_UNEXPECTED_WAKEUP2] = "LIN_UNEXPECTED_WAKEUP2";
-    arr[LIN_SHORT_OR_SLOW_RESPONSE3] = "LIN_SHORT_OR_SLOW_RESPONSE3";
-    arr[LIN_DISTURBANCE_EVENT2] = "LIN_DISTURBANCE_EVENT2";
-    arr[APP_TRIGGER] = "APP_TRIGGER";
-    arr[ENV_INTEGER] = "ENV_INTEGER";
-    arr[ENV_DOUBLE] = "ENV_DOUBLE";
-    arr[ENV_STRING] = "ENV_STRING";
-    arr[ENV_DATA] = "ENV_DATA";
-    arr[GRAPHICS_OBJECT] = "GRAPHICS_OBJECT";
+    arr[LIN_UNEXPECTED_WAKEUP] = "LIN_UNEXPECTED_WAKEUP";
+    arr[LIN_SHORT_OR_SLOW_RESPONSE] = "LIN_SHORT_OR_SLOW_RESPONSE";
+    arr[LIN_DISTURBANCE_EVENT] = "LIN_DISTURBANCE_EVENT";
+    arr[SERIAL_EVENT] = "SERIAL_EVENT";
+    arr[OVERRUN_ERROR] = "OVERRUN_ERROR";
+    arr[EVENT_COMMENT] = "EVENT_COMMENT";
+    arr[WLAN_FRAME] = "WLAN_FRAME";
+    arr[WLAN_STATISTIC] = "WLAN_STATISTIC";
+    arr[MOST_ECL] = "MOST_ECL";
     arr[GLOBAL_MARKER] = "GLOBAL_MARKER";
     arr[AFDX_FRAME] = "AFDX_FRAME";
     arr[AFDX_STATISTIC] = "AFDX_STATISTIC";
@@ -669,28 +723,30 @@ std::string_view objectTypeName(uint32_t t) {
     arr[LIN_SHORT_OR_SLOW_RESPONSE2] = "LIN_SHORT_OR_SLOW_RESPONSE2";
     arr[AFDX_STATUS] = "AFDX_STATUS";
     arr[AFDX_BUS_STATISTIC] = "AFDX_BUS_STATISTIC";
+    arr[Reserved108] = "Reserved108";
     arr[AFDX_ERROR_EVENT] = "AFDX_ERROR_EVENT";
     arr[A429_ERROR] = "A429_ERROR";
     arr[A429_STATUS] = "A429_STATUS";
     arr[A429_BUS_STATISTIC] = "A429_BUS_STATISTIC";
     arr[A429_MESSAGE] = "A429_MESSAGE";
     arr[ETHERNET_STATISTIC] = "ETHERNET_STATISTIC";
-    arr[RESERVED_1] = "RESERVED_1";
-    arr[RESERVED_2] = "RESERVED_2";
-    arr[RESERVED_3] = "RESERVED_3";
+    arr[Unknown115] = "Unknown115";
+    arr[Reserved116] = "Reserved116";
+    arr[Reserved117] = "Reserved117";
     arr[TEST_STRUCTURE] = "TEST_STRUCTURE";
     arr[DIAG_REQUEST_INTERPRETATION] = "DIAG_REQUEST_INTERPRETATION";
-    arr[ETHERNET_FRAME] = "ETHERNET_FRAME";
     arr[ETHERNET_FRAME_EX] = "ETHERNET_FRAME_EX";
+    arr[ETHERNET_FRAME_FORWARDED] = "ETHERNET_FRAME_FORWARDED";
     arr[ETHERNET_ERROR_EX] = "ETHERNET_ERROR_EX";
     arr[ETHERNET_ERROR_FORWARDED] = "ETHERNET_ERROR_FORWARDED";
-    arr[FUNC_BUS] = "FUNC_BUS";
+    arr[FUNCTION_BUS] = "FUNCTION_BUS";
     arr[DATA_LOST_BEGIN] = "DATA_LOST_BEGIN";
     arr[DATA_LOST_END] = "DATA_LOST_END";
     arr[WATER_MARK_EVENT] = "WATER_MARK_EVENT";
     arr[TRIGGER_CONDITION] = "TRIGGER_CONDITION";
     arr[CAN_SETTING_CHANGED] = "CAN_SETTING_CHANGED";
-    arr[DISTRIBUTED_OBJECT] = "DISTRIBUTED_OBJECT";
+    arr[DISTRIBUTED_OBJECT_MEMBER] = "DISTRIBUTED_OBJECT_MEMBER";
+    arr[ATTRIBUTE_EVENT] = "ATTRIBUTE_EVENT";
     return arr;
   }();
   if (t < names.size()) return names[t];
@@ -923,7 +979,7 @@ static void runProducer(Analyzer* self, Cursor cursor, WorkQueue& queue) {
 
     spdlog::debug("pipeline: type={} objectSize={}", base.objectType, base.objectSize);
 
-    if (CONTAINER == base.objectType) {
+    if (LOG_CONTAINER == base.objectType) {
       BlfObjectHeader extHdr;
       if (!cursor.read(reinterpret_cast<char*>(&extHdr),
                        sizeof(BlfObjectHeaderBase))) break;
@@ -933,8 +989,8 @@ static void runProducer(Analyzer* self, Cursor cursor, WorkQueue& queue) {
       const char* compData = cursor.peek(compSize);
       if (!compData) break;
 
-      // push returns false if cancelled while blocked – exit the loop
-      if (!queue.push({compData, compSize, containerIdx++}, self->cancelled)) break;
+      const size_t fileOffset = cursor.tell() - 32; // LOBJ (4) + base remainder (12) + extHdr (16)
+      if (!queue.push({compData, compSize, containerIdx++, fileOffset}, self->cancelled)) break;
 
       // update progress for UI polling
       self->bytesRead.store(cursor.tell(), std::memory_order_relaxed);
@@ -1033,6 +1089,252 @@ static void runPipeline(Analyzer* self, Cursor cursor, const BlfFileHeader& hdr,
 
 
 // ---------------------------------------------------------------------------
+// Lazy-Loading Index & Decode
+// ---------------------------------------------------------------------------
+
+struct ContainerCount {
+    uint64_t containerIndex;
+    size_t fileOffset;
+    uint32_t countInContainer;
+};
+
+static void runIndexConsumer(Analyzer* self, WorkQueue& queue,
+                             std::mutex& countsMu,
+                             std::vector<ContainerCount>& containerCounts) {
+    auto decomp = std::unique_ptr<libdeflate_decompressor, decltype(&libdeflate_free_decompressor)>(
+        libdeflate_alloc_decompressor(), libdeflate_free_decompressor);
+    if (!decomp) return;
+    std::vector<char> localBuf;
+
+    while (auto item = queue.pop()) {
+        if (self->skipDecompress) continue;
+
+        const size_t needed = item->compSize * DECOMP_BUFFER_PREALLOC_RATIO;
+        if (localBuf.size() < needed) localBuf.resize(needed);
+
+        size_t actualOut = 0;
+        libdeflate_result res;
+        do {
+            res = libdeflate_zlib_decompress(
+                decomp.get(), item->compData, item->compSize,
+                localBuf.data(), localBuf.size(), &actualOut);
+            if (res == LIBDEFLATE_INSUFFICIENT_SPACE) {
+                localBuf.resize(localBuf.size() * 2);
+            }
+        } while (res == LIBDEFLATE_INSUFFICIENT_SPACE);
+
+        if (res == LIBDEFLATE_SUCCESS) {
+            Cursor cur{localBuf.data(), localBuf.data() + actualOut, localBuf.data()};
+            BlfObjectHeaderBase base;
+            uint32_t countInContainer = 0;
+
+            while (!cur.eof()) {
+                if (!findNextLobj(cur, base.signature)) break;
+                if (!cur.read(reinterpret_cast<char*>(&base) + 4, sizeof(BlfObjectHeaderBase) - 4)) break;
+
+                const size_t objectStart = cur.tell() - sizeof(BlfObjectHeaderBase);
+                const size_t objectEnd   = objectStart + base.objectSize;
+
+                bool isMessage = (base.objectType != LOG_CONTAINER);
+
+                if (isMessage) {
+                    countInContainer++;
+                }
+
+                if (objectEnd > actualOut) {
+                    // Split object: the tail fragment will be skipped by the next container's findNextLobj
+                    // so it's correct to count it in this container where the header is located.
+                    break;
+                }
+
+                const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
+                if (!cur.skip(remaining)) break;
+            }
+
+            // Push even if 0, to track offsets correctly, though 0 is fine.
+            std::lock_guard<std::mutex> lk(countsMu);
+            containerCounts.push_back({item->containerIndex, item->fileOffset, countInContainer});
+        }
+    }
+}
+
+size_t Analyzer::buildIndex(const std::string& filename) {
+    using Clock = std::chrono::steady_clock;
+
+    if (!mf_.open(filename)) return 0;
+    spdlog::info("Building index for: {} ({:.2f} MiB)", filename, mf_.size / 1048576.0);
+
+    totalBytes.store(mf_.size, std::memory_order_relaxed);
+    bytesRead.store(0, std::memory_order_relaxed);
+
+    Cursor cursor = mf_.cursor();
+    auto fileHeader = readFileHeader(cursor);
+    if (!fileHeader) return 0;
+
+    const size_t nWorkers = std::max<size_t>(1, std::thread::hardware_concurrency());
+    WorkQueue queue(nWorkers * 4);
+
+    std::mutex countsMu;
+    std::vector<ContainerCount> containerCounts;
+
+    std::vector<std::thread> consumers;
+    for (size_t i = 0; i < nWorkers; ++i) {
+        consumers.emplace_back(runIndexConsumer, this, std::ref(queue), std::ref(countsMu), std::ref(containerCounts));
+    }
+
+    auto t0 = Clock::now();
+    runProducer(this, cursor, queue);
+    queue.close();
+    for (auto& w : consumers) w.join();
+
+    std::sort(containerCounts.begin(), containerCounts.end(), [](const ContainerCount& a, const ContainerCount& b) {
+        return a.containerIndex < b.containerIndex;
+    });
+
+    chunkIndex_.clear();
+    size_t cumulativeMessages = 0;
+    size_t nextChunkBoundary = 0;
+
+    for (const auto& cc : containerCounts) {
+        if (cumulativeMessages + cc.countInContainer > nextChunkBoundary) {
+            uint32_t skipMessages = nextChunkBoundary - cumulativeMessages;
+            chunkIndex_.push_back({cc.fileOffset, cc.containerIndex, skipMessages});
+            nextChunkBoundary += CHUNK_SIZE;
+
+            // It's possible one container has >10k messages, so loop to add all boundaries in it
+            while (cumulativeMessages + cc.countInContainer > nextChunkBoundary) {
+                skipMessages = nextChunkBoundary - cumulativeMessages;
+                chunkIndex_.push_back({cc.fileOffset, cc.containerIndex, skipMessages});
+                nextChunkBoundary += CHUNK_SIZE;
+            }
+        }
+        cumulativeMessages += cc.countInContainer;
+    }
+
+    totalMessages_ = cumulativeMessages;
+    auto t1 = Clock::now();
+    spdlog::info("buildIndex done: scanned {} containers, {} messages, {} index chunks in {:.2f} ms",
+                 containerCounts.size(), totalMessages_, chunkIndex_.size(),
+                 std::chrono::duration<double, std::milli>(t1 - t0).count());
+
+    return totalMessages_;
+}
+
+std::vector<TraceMessage> Analyzer::decodeChunk(size_t chunkIndex) const {
+    std::vector<TraceMessage> out;
+    if (chunkIndex >= chunkIndex_.size() || mf_.size == 0) return out;
+
+    const auto& entry = chunkIndex_[chunkIndex];
+    size_t messagesToSkip = entry.skipMessages;
+    size_t messagesCollected = 0;
+
+    // We expect the LOBJ of the container to be at entry.fileOffset.
+    Cursor cursor = mf_.cursor();
+    if (!cursor.skip(entry.fileOffset)) return out;
+
+    auto decomp = std::unique_ptr<libdeflate_decompressor, decltype(&libdeflate_free_decompressor)>(
+        libdeflate_alloc_decompressor(), libdeflate_free_decompressor);
+    std::vector<char> localBuf;
+
+    // A helper Analyzer instance to trick processInnerObjects into not storing in its own vector
+    // Wait, processInnerObjects takes Analyzer* and appends to self->messages.
+    // That uses a mutex and is not suitable for const decodeChunk which returns its own vector.
+    // Let's implement a small standalone loop or just copy processInnerObjects behavior.
+    // To avoid duplication, I will create a temporary Analyzer.
+    Analyzer tempAnalyzer;
+    tempAnalyzer.collectMessages = true;
+    tempAnalyzer.maxMessages = CHUNK_SIZE;
+
+    BlfObjectHeaderBase base;
+    std::vector<char> headFrag, tailFrag;
+
+    while (messagesCollected < CHUNK_SIZE && !cursor.eof()) {
+        if (!findNextLobj(cursor, base.signature)) break;
+        if (!cursor.read(reinterpret_cast<char*>(&base) + 4, sizeof(BlfObjectHeaderBase) - 4)) break;
+
+        if (LOG_CONTAINER == base.objectType) {
+            BlfObjectHeader extHdr;
+            if (!cursor.read(reinterpret_cast<char*>(&extHdr), sizeof(BlfObjectHeaderBase))) break;
+
+            const size_t compSize = base.objectSize - base.headerSize - sizeof(BlfObjectHeader);
+            const char* compData = cursor.peek(compSize);
+            if (!compData) break;
+
+            const size_t needed = compSize * DECOMP_BUFFER_PREALLOC_RATIO;
+            if (localBuf.size() < needed) localBuf.resize(needed);
+
+            size_t actualOut = 0;
+            libdeflate_result res;
+            do {
+                res = libdeflate_zlib_decompress(decomp.get(), compData, compSize, localBuf.data(), localBuf.size(), &actualOut);
+                if (res == LIBDEFLATE_INSUFFICIENT_SPACE) localBuf.resize(localBuf.size() * 2);
+            } while (res == LIBDEFLATE_INSUFFICIENT_SPACE);
+
+            if (res == LIBDEFLATE_SUCCESS) {
+                std::unordered_map<uint32_t, uint64_t> lCounts;
+                uint64_t lSplits = 0;
+                std::vector<char> nextTailFrag;
+
+                // Assemble head with previous tail if any
+                if (!tailFrag.empty()) {
+                    // Extract head from current container
+                    std::vector<char> currentHead;
+                    Cursor headCur{localBuf.data(), localBuf.data() + actualOut, localBuf.data()};
+                    BlfObjectHeaderBase hBase;
+                    if (findNextLobj(headCur, hBase.signature)) {
+                        const size_t firstLobjAt = headCur.tell() - 4;
+                        if (firstLobjAt > 0) {
+                            currentHead.assign(localBuf.data(), localBuf.data() + firstLobjAt);
+                        }
+                    } else {
+                        currentHead.assign(localBuf.data(), localBuf.data() + actualOut);
+                    }
+
+                    if (!currentHead.empty()) {
+                        std::vector<char> stitched;
+                        stitched.reserve(tailFrag.size() + currentHead.size());
+                        stitched.insert(stitched.end(), tailFrag.begin(), tailFrag.end());
+                        stitched.insert(stitched.end(), currentHead.begin(), currentHead.end());
+
+                        processInnerObjects(&tempAnalyzer, stitched.data(), stitched.size(), lCounts, lSplits, nullptr, nullptr);
+                    }
+                    tailFrag.clear();
+                }
+
+                processInnerObjects(&tempAnalyzer, localBuf.data(), actualOut, lCounts, lSplits, &headFrag, &nextTailFrag);
+                tailFrag = std::move(nextTailFrag);
+            }
+        } else {
+            const size_t remaining = base.objectSize - sizeof(BlfObjectHeaderBase);
+            cursor.skip(remaining);
+        }
+
+        // Move messages from tempAnalyzer, apply skip, take up to CHUNK_SIZE
+        if (!tempAnalyzer.messages.empty()) {
+            size_t i = 0;
+            if (messagesToSkip > 0) {
+                if (messagesToSkip >= tempAnalyzer.messages.size()) {
+                    messagesToSkip -= tempAnalyzer.messages.size();
+                    i = tempAnalyzer.messages.size();
+                } else {
+                    i = messagesToSkip;
+                    messagesToSkip = 0;
+                }
+            }
+
+            for (; i < tempAnalyzer.messages.size() && messagesCollected < CHUNK_SIZE; ++i) {
+                out.push_back(std::move(tempAnalyzer.messages[i]));
+                messagesCollected++;
+            }
+            tempAnalyzer.messages.clear();
+            tempAnalyzer.messagesCollected.store(0);
+        }
+    }
+
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // processFile – top-level orchestrator
 // ---------------------------------------------------------------------------
 void Analyzer::processFile(const std::string& filename) {
@@ -1065,7 +1367,5 @@ void Analyzer::processFile(const std::string& filename) {
               });
   }
 }
-
-
 
 } // namespace fastrace

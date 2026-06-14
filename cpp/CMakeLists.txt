@@ -67,7 +67,7 @@ add_library(fastrace_analyzer STATIC
   src/SignalDatabases.cpp
   src/ArxmlParser.cpp
 )
-target_include_directories(fastrace_analyzer PUBLIC include)
+target_include_directories(fastrace_analyzer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog sqlite3_amalg pugixml::pugixml)
 
 # Executable

@@ -90,7 +90,7 @@
     </layout>
    </item>
    <item>
-    <widget class="QTableWidget" name="msgTable">
+    <widget class="QTableView" name="msgTable">
      <property name="alternatingRowColors">
       <bool>true</bool>
      </property>
@@ -100,52 +100,9 @@
      <property name="showGrid">
       <bool>false</bool>
      </property>
-     <property name="columnCount">
-      <number>8</number>
-     </property>
      <attribute name="verticalHeaderVisible">
       <bool>false</bool>
      </attribute>
-     <column>
-      <property name="text">
-       <string>Time</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>Bus</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>ID / Src</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>Name</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>DLC</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>Data</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>Length</string>
-      </property>
-     </column>
-     <column>
-      <property name="text">
-       <string>ECU</string>
-      </property>
-     </column>
     </widget>
    </item>
   </layout>

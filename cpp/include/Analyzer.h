@@ -8,8 +8,15 @@
 #include <vector>
 #include <cstdint>
 #include <string_view>
+#include "MappedFile.h"
 
 namespace fastrace {
+
+struct ChunkEntry {
+    size_t   fileOffset;      // byte offset of container in mmap
+    uint64_t containerIndex;  // 0-based container sequence number
+    uint32_t skipMessages;    // messages before chunk start inside the container
+};
 
 struct PerfCounters {
   uint64_t containers        = 0;
@@ -44,7 +51,18 @@ public:
   std::vector<TraceMessage> messages;
   std::mutex messagesMu;
 
+  static constexpr size_t CHUNK_SIZE = 10'000;
+
+  size_t buildIndex(const std::string& filename);
+  std::vector<TraceMessage> decodeChunk(size_t chunkIndex) const;
+  size_t totalMessages() const noexcept { return totalMessages_; }
+
   void processFile(const std::string& filename);
+
+private:
+  std::vector<ChunkEntry> chunkIndex_;
+  size_t                  totalMessages_ = 0;
+  MappedFile              mf_;
 };
 
 } // namespace fastrace
