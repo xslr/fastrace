@@ -2,17 +2,19 @@
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class DetectionsWidget; }
+namespace Ui {
+class DetectionsWidget;
+}
 QT_END_NAMESPACE
 
 class DetectionsWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit DetectionsWidget(QWidget *parent = nullptr);
+    explicit DetectionsWidget(QWidget* parent = nullptr);
     ~DetectionsWidget() override;
 
 private:
-    Ui::DetectionsWidget *ui;
+    Ui::DetectionsWidget* ui;
 
     void populateDetections();
     void populateStatistics();

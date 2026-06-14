@@ -1,14 +1,16 @@
 #include "RecentFiles.h"
-#include <sqlite3.h>
+
 #include <spdlog/spdlog.h>
-#include <filesystem>
+#include <sqlite3.h>
+
 #include <chrono>
+#include <filesystem>
 
 #ifndef _WIN32
 #include <sys/stat.h>
 #else
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #endif
 
 namespace fastrace {
@@ -17,23 +19,25 @@ struct RecentFiles::Impl {
     sqlite3* db = nullptr;
 };
 
-static void statEntry(const std::string& path, RecentFileEntry& e) {
+static void statEntry(const std::string& path, RecentFileEntry& e)
+{
 #ifndef _WIN32
-    struct stat st{};
+    struct stat st {};
     if (::stat(path.c_str(), &st) == 0) {
-        e.sizeBytes   = static_cast<int64_t>(st.st_size);
+        e.sizeBytes = static_cast<int64_t>(st.st_size);
         e.modTimeUnix = static_cast<int64_t>(st.st_mtime);
     }
 #else
-    struct __stat64 st{};
+    struct __stat64 st {};
     if (::_stat64(path.c_str(), &st) == 0) {
-        e.sizeBytes   = static_cast<int64_t>(st.st_size);
+        e.sizeBytes = static_cast<int64_t>(st.st_size);
         e.modTimeUnix = static_cast<int64_t>(st.st_mtime);
     }
 #endif
 }
 
-std::string RecentFiles::defaultDbPath() {
+std::string RecentFiles::defaultDbPath()
+{
     namespace fs = std::filesystem;
     std::string dir;
 #ifdef _WIN32
@@ -63,21 +67,19 @@ RecentFiles::RecentFiles(std::string dbPath)
 
     int rc = sqlite3_open(dbPath.c_str(), &impl_->db);
     if (rc != SQLITE_OK) {
-        spdlog::error("RecentFiles: sqlite3_open({}) failed: {}", dbPath,
-                      sqlite3_errmsg(impl_->db));
+        spdlog::error("RecentFiles: sqlite3_open({}) failed: {}", dbPath, sqlite3_errmsg(impl_->db));
         sqlite3_close(impl_->db);
         impl_->db = nullptr;
         return;
     }
 
-    const char* schema =
-        "CREATE TABLE IF NOT EXISTS recent_files ("
-        "  path      TEXT PRIMARY KEY,"
-        "  opened_at INTEGER NOT NULL DEFAULT 0"
-        ");"
-        "CREATE TABLE IF NOT EXISTS active_files ("
-        "  path TEXT PRIMARY KEY"
-        ");";
+    const char* schema = "CREATE TABLE IF NOT EXISTS recent_files ("
+                         "  path      TEXT PRIMARY KEY,"
+                         "  opened_at INTEGER NOT NULL DEFAULT 0"
+                         ");"
+                         "CREATE TABLE IF NOT EXISTS active_files ("
+                         "  path TEXT PRIMARY KEY"
+                         ");";
 
     char* errMsg = nullptr;
     rc = sqlite3_exec(impl_->db, schema, nullptr, nullptr, &errMsg);
@@ -87,57 +89,61 @@ RecentFiles::RecentFiles(std::string dbPath)
     }
 }
 
-RecentFiles::~RecentFiles() {
+RecentFiles::~RecentFiles()
+{
     if (impl_ && impl_->db) {
         sqlite3_close(impl_->db);
         impl_->db = nullptr;
     }
 }
 
-void RecentFiles::addFile(const std::string& path) {
-    if (!impl_->db) return;
+void RecentFiles::addFile(const std::string& path)
+{
+    if (!impl_->db) {
+        return;
+    }
 
-    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto now
+        = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 
     sqlite3_stmt* stmt = nullptr;
-    const char* upsert =
-        "INSERT INTO recent_files (path, opened_at) VALUES (?, ?) "
-        "ON CONFLICT(path) DO UPDATE SET opened_at = excluded.opened_at;";
+    const char* upsert = "INSERT INTO recent_files (path, opened_at) VALUES (?, ?) "
+                         "ON CONFLICT(path) DO UPDATE SET opened_at = excluded.opened_at;";
     if (sqlite3_prepare_v2(impl_->db, upsert, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int64(stmt, 2, static_cast<sqlite3_int64>(now));
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     } else {
-        spdlog::error("RecentFiles: addFile prepare failed: {}",
-                      sqlite3_errmsg(impl_->db));
+        spdlog::error("RecentFiles: addFile prepare failed: {}", sqlite3_errmsg(impl_->db));
     }
 
     // Keep only the 10 most recently opened entries
-    const char* prune =
-        "DELETE FROM recent_files WHERE path NOT IN "
-        "(SELECT path FROM recent_files ORDER BY opened_at DESC LIMIT 10);";
+    const char* prune = "DELETE FROM recent_files WHERE path NOT IN "
+                        "(SELECT path FROM recent_files ORDER BY opened_at DESC LIMIT 10);";
     sqlite3_exec(impl_->db, prune, nullptr, nullptr, nullptr);
 }
 
-std::vector<RecentFileEntry> RecentFiles::getRecent(int limit) const {
+std::vector<RecentFileEntry> RecentFiles::getRecent(int limit) const
+{
     std::vector<RecentFileEntry> result;
-    if (!impl_->db) return result;
+    if (!impl_->db) {
+        return result;
+    }
 
     sqlite3_stmt* stmt = nullptr;
-    const char* sql =
-        "SELECT path FROM recent_files ORDER BY opened_at DESC LIMIT ?;";
+    const char* sql = "SELECT path FROM recent_files ORDER BY opened_at DESC LIMIT ?;";
     if (sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        spdlog::error("RecentFiles: getRecent prepare failed: {}",
-                      sqlite3_errmsg(impl_->db));
+        spdlog::error("RecentFiles: getRecent prepare failed: {}", sqlite3_errmsg(impl_->db));
         return result;
     }
 
     sqlite3_bind_int(stmt, 1, limit);
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        if (!raw) continue;
+        if (!raw) {
+            continue;
+        }
 
         RecentFileEntry e;
         e.path = raw;
@@ -149,8 +155,11 @@ std::vector<RecentFileEntry> RecentFiles::getRecent(int limit) const {
     return result;
 }
 
-void RecentFiles::setActive(const std::string& path, bool active) {
-    if (!impl_->db) return;
+void RecentFiles::setActive(const std::string& path, bool active)
+{
+    if (!impl_->db) {
+        return;
+    }
 
     sqlite3_stmt* stmt = nullptr;
     if (active) {
@@ -160,8 +169,7 @@ void RecentFiles::setActive(const std::string& path, bool active) {
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         } else {
-            spdlog::error("RecentFiles: setActive(true) prepare failed: {}",
-                          sqlite3_errmsg(impl_->db));
+            spdlog::error("RecentFiles: setActive(true) prepare failed: {}", sqlite3_errmsg(impl_->db));
         }
     } else {
         const char* sql = "DELETE FROM active_files WHERE path = ?;";
@@ -170,31 +178,33 @@ void RecentFiles::setActive(const std::string& path, bool active) {
             sqlite3_step(stmt);
             sqlite3_finalize(stmt);
         } else {
-            spdlog::error("RecentFiles: setActive(false) prepare failed: {}",
-                          sqlite3_errmsg(impl_->db));
+            spdlog::error("RecentFiles: setActive(false) prepare failed: {}", sqlite3_errmsg(impl_->db));
         }
     }
 }
 
-std::vector<std::string> RecentFiles::getActivePaths() const {
+std::vector<std::string> RecentFiles::getActivePaths() const
+{
     std::vector<std::string> result;
-    if (!impl_->db) return result;
+    if (!impl_->db) {
+        return result;
+    }
 
     sqlite3_stmt* stmt = nullptr;
     const char* sql = "SELECT path FROM active_files;";
     if (sqlite3_prepare_v2(impl_->db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
-        spdlog::error("RecentFiles: getActivePaths prepare failed: {}",
-                      sqlite3_errmsg(impl_->db));
+        spdlog::error("RecentFiles: getActivePaths prepare failed: {}", sqlite3_errmsg(impl_->db));
         return result;
     }
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const char* raw = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        if (raw) result.emplace_back(raw);
+        if (raw) {
+            result.emplace_back(raw);
+        }
     }
     sqlite3_finalize(stmt);
     return result;
 }
 
 } // namespace fastrace
-

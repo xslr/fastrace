@@ -2,6 +2,7 @@
 
 #include <string>
 #include <thread>
+
 #include "Cursor.h"
 
 #ifdef _WIN32
@@ -11,11 +12,11 @@
 
 struct MappedFile {
 #ifdef _WIN32
-    void*  addr = nullptr;
+    void* addr = nullptr;
     HANDLE hFile = INVALID_HANDLE_VALUE;
     HANDLE hMapping = NULL;
 #else
-    void*  addr;
+    void* addr;
 #endif
     size_t size = 0;
     std::thread prefault_thread;

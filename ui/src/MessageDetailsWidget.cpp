@@ -1,10 +1,13 @@
 #include "MessageDetailsWidget.h"
-#include "ui_MessageDetailsWidget.h"
-#include <QHeaderView>
-#include <QColor>
 
-MessageDetailsWidget::MessageDetailsWidget(QWidget *parent)
-    : QWidget(parent), ui(new Ui::MessageDetailsWidget)
+#include <QColor>
+#include <QHeaderView>
+
+#include "ui_MessageDetailsWidget.h"
+
+MessageDetailsWidget::MessageDetailsWidget(QWidget* parent)
+    : QWidget(parent)
+    , ui(new Ui::MessageDetailsWidget)
 {
     ui->setupUi(this);
 
@@ -20,32 +23,32 @@ MessageDetailsWidget::MessageDetailsWidget(QWidget *parent)
     populateGeneralProps();
 }
 
-MessageDetailsWidget::~MessageDetailsWidget()
-{
-    delete ui;
-}
+MessageDetailsWidget::~MessageDetailsWidget() { delete ui; }
 
 void MessageDetailsWidget::populateGeneralProps()
 {
-    struct Row { const char *key; const char *value; };
+    struct Row {
+        const char* key;
+        const char* value;
+    };
     static const Row rows[] = {
-        {"Timestamp",    "00:02:19.340123"},
-        {"Relative Time","00:02:19.340123"},
-        {"Bus",          "CAN FD (500 kbps)"},
-        {"ID",           "0x101"},
-        {"Name",         "EngineData_1"},
-        {"DLC",          "8"},
-        {"Length",       "8 bytes"},
-        {"Type",         "Data Frame"},
+        { "Timestamp", "00:02:19.340123" },
+        { "Relative Time", "00:02:19.340123" },
+        { "Bus", "CAN FD (500 kbps)" },
+        { "ID", "0x101" },
+        { "Name", "EngineData_1" },
+        { "DLC", "8" },
+        { "Length", "8 bytes" },
+        { "Type", "Data Frame" },
     };
 
-    QTableWidget *t = ui->generalProps;
+    QTableWidget* t = ui->generalProps;
     t->setRowCount(8);
     for (int i = 0; i < 8; ++i) {
-        auto *kItem = new QTableWidgetItem(rows[i].key);
+        auto* kItem = new QTableWidgetItem(rows[i].key);
         kItem->setForeground(QColor("#8b8b99"));
 
-        auto *vItem = new QTableWidgetItem(rows[i].value);
+        auto* vItem = new QTableWidgetItem(rows[i].value);
         vItem->setForeground(QColor("#dcdcdc"));
 
         t->setItem(i, 0, kItem);

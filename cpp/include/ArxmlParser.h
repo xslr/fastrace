@@ -1,7 +1,8 @@
 #pragma once
-#include "ArxmlTypes.h"
 #include <string>
 #include <vector>
+
+#include "ArxmlTypes.h"
 
 namespace fastrace {
 

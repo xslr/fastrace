@@ -1,6 +1,5 @@
 #include "LeftPanelWidget.h"
-#include "ui_LeftPanelWidget.h"
-#include "ArxmlParser.h"
+
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QListWidgetItem>
@@ -8,7 +7,10 @@
 #include <filesystem>
 #include <map>
 
-LeftPanelWidget::LeftPanelWidget(QWidget *parent)
+#include "ArxmlParser.h"
+#include "ui_LeftPanelWidget.h"
+
+LeftPanelWidget::LeftPanelWidget(QWidget* parent)
     : QWidget(parent)
     , ui(new Ui::LeftPanelWidget)
     , m_signalDbs()
@@ -31,26 +33,22 @@ LeftPanelWidget::LeftPanelWidget(QWidget *parent)
     ui->serviceTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     ui->serviceTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
 
-    connect(ui->btnAddDb,    &QPushButton::clicked, this, &LeftPanelWidget::onBtnAddDbClicked);
+    connect(ui->btnAddDb, &QPushButton::clicked, this, &LeftPanelWidget::onBtnAddDbClicked);
     connect(ui->btnRemoveDb, &QPushButton::clicked, this, &LeftPanelWidget::onBtnRemoveDbClicked);
 
     populateTraceSummary();
     loadDatabases();
 }
 
-LeftPanelWidget::~LeftPanelWidget()
-{
-    delete ui;
-}
+LeftPanelWidget::~LeftPanelWidget() { delete ui; }
 
 void LeftPanelWidget::onBtnAddDbClicked()
 {
     const QString path = QFileDialog::getOpenFileName(
-        this,
-        tr("Open ARXML Signal Database"),
-        QString(),
-        tr("ARXML Files (*.arxml);;All Files (*)"));
-    if (path.isEmpty()) return;
+        this, tr("Open ARXML Signal Database"), QString(), tr("ARXML Files (*.arxml);;All Files (*)"));
+    if (path.isEmpty()) {
+        return;
+    }
 
     m_signalDbs.addDatabase(path.toStdString());
     loadDatabases();
@@ -59,7 +57,9 @@ void LeftPanelWidget::onBtnAddDbClicked()
 void LeftPanelWidget::onBtnRemoveDbClicked()
 {
     auto* item = ui->lstDatabases->currentItem();
-    if (!item) return;
+    if (!item) {
+        return;
+    }
 
     const std::string path = item->data(Qt::UserRole).toString().toStdString();
     m_signalDbs.removeDatabase(path);
@@ -81,8 +81,7 @@ void LeftPanelWidget::populateDatabasesList()
 {
     ui->lstDatabases->clear();
     for (const auto& path : m_signalDbs.getActiveDatabases()) {
-        const QString display = QString::fromStdString(
-            std::filesystem::path(path).filename().string());
+        const QString display = QString::fromStdString(std::filesystem::path(path).filename().string());
         auto* item = new QListWidgetItem(display, ui->lstDatabases);
         item->setData(Qt::UserRole, QString::fromStdString(path));
         item->setToolTip(QString::fromStdString(path));
@@ -91,13 +90,16 @@ void LeftPanelWidget::populateDatabasesList()
 
 void LeftPanelWidget::populateTraceSummary()
 {
-    struct Row { const char *key; const char *value; };
+    struct Row {
+        const char* key;
+        const char* value;
+    };
     static const Row rows[] = {
-        {"Messages",   "—"},
-        {"ECUs",       "—"},
-        {"Start time", "—"},
-        {"Duration",   "—"},
-        {"Bus",        "—"},
+        { "Messages", "—" },
+        { "ECUs", "—" },
+        { "Start time", "—" },
+        { "Duration", "—" },
+        { "Bus", "—" },
     };
 
     ui->traceSummary->setRowCount(5);
@@ -114,28 +116,26 @@ void LeftPanelWidget::populateMessagesTab()
 {
     ui->busTree->clear();
 
-    if (m_arxmlDb.messages.empty()) return;
+    if (m_arxmlDb.messages.empty()) {
+        return;
+    }
 
     // Group by bus type + cluster label
     std::map<std::string, std::vector<const fastrace::ArMessage*>> byCluster;
     for (const auto& msg : m_arxmlDb.messages) {
-        const std::string prefix =
-            (msg.busType == fastrace::ArBusType::CAN) ? "CAN  " : "ETH  ";
+        const std::string prefix = (msg.busType == fastrace::ArBusType::CAN) ? "CAN  " : "ETH  ";
         byCluster[prefix + msg.cluster].push_back(&msg);
     }
 
     for (const auto& [label, msgs] : byCluster) {
-        auto* clNode = new QTreeWidgetItem(ui->busTree,
-            QStringList{QString::fromStdString(label)});
+        auto* clNode = new QTreeWidgetItem(ui->busTree, QStringList { QString::fromStdString(label) });
         for (const auto* msg : msgs) {
             QString id;
             if (msg->busType == fastrace::ArBusType::CAN) {
-                id = msg->isExtended
-                    ? QString("0x%1").arg(msg->canId, 8, 16, QChar('0')).toUpper()
-                    : QString("0x%1").arg(msg->canId, 3, 16, QChar('0')).toUpper();
+                id = msg->isExtended ? QString("0x%1").arg(msg->canId, 8, 16, QChar('0')).toUpper()
+                                     : QString("0x%1").arg(msg->canId, 3, 16, QChar('0')).toUpper();
             }
-            new QTreeWidgetItem(clNode,
-                QStringList{QString::fromStdString(msg->name), id});
+            new QTreeWidgetItem(clNode, QStringList { QString::fromStdString(msg->name), id });
         }
         clNode->setExpanded(true);
     }
@@ -146,16 +146,14 @@ void LeftPanelWidget::populateSignalsTab()
     ui->sigTree->clear();
 
     for (const auto& msg : m_arxmlDb.messages) {
-        if (msg.signalDefs.empty()) continue;
-        auto* msgItem = new QTreeWidgetItem(ui->sigTree,
-            QStringList{QString::fromStdString(msg.name)});
+        if (msg.signalDefs.empty()) {
+            continue;
+        }
+        auto* msgItem = new QTreeWidgetItem(ui->sigTree, QStringList { QString::fromStdString(msg.name) });
         for (const auto& sig : msg.signalDefs) {
-            new QTreeWidgetItem(msgItem, QStringList{
-                QString::fromStdString(sig.name),
-                QString::number(sig.startBit),
-                QString::number(sig.bitLength),
-                sig.isBigEndian ? "Motorola" : "Intel"
-            });
+            new QTreeWidgetItem(msgItem,
+                QStringList { QString::fromStdString(sig.name), QString::number(sig.startBit),
+                    QString::number(sig.bitLength), sig.isBigEndian ? "Motorola" : "Intel" });
         }
     }
 }
@@ -163,17 +161,17 @@ void LeftPanelWidget::populateSignalsTab()
 void LeftPanelWidget::populateEcusTab()
 {
     ui->ecuList->clear();
-    for (const auto& ecu : m_arxmlDb.ecus)
+    for (const auto& ecu : m_arxmlDb.ecus) {
         ui->ecuList->addItem(QString::fromStdString(ecu.name));
+    }
 }
 
 void LeftPanelWidget::populateSomeIpTab()
 {
     ui->serviceTree->clear();
     for (const auto& svc : m_arxmlDb.someipServices) {
-        new QTreeWidgetItem(ui->serviceTree, QStringList{
-            QString::fromStdString(svc.name),
-            QString("0x%1").arg(svc.serviceId, 4, 16, QChar('0')).toUpper()
-        });
+        new QTreeWidgetItem(ui->serviceTree,
+            QStringList {
+                QString::fromStdString(svc.name), QString("0x%1").arg(svc.serviceId, 4, 16, QChar('0')).toUpper() });
     }
 }

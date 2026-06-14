@@ -1,10 +1,14 @@
 #include "MessageListWidget.h"
-#include "ui_MessageListWidget.h"
-#include "MessageTableModel.h"
+
 #include <QHeaderView>
 
-MessageListWidget::MessageListWidget(QWidget *parent)
-    : QWidget(parent), ui(new Ui::MessageListWidget), m_model(new MessageTableModel(this))
+#include "MessageTableModel.h"
+#include "ui_MessageListWidget.h"
+
+MessageListWidget::MessageListWidget(QWidget* parent)
+    : QWidget(parent)
+    , ui(new Ui::MessageListWidget)
+    , m_model(new MessageTableModel(this))
 {
     ui->setupUi(this);
 
@@ -21,32 +25,23 @@ MessageListWidget::MessageListWidget(QWidget *parent)
     ui->msgTable->verticalHeader()->setDefaultSectionSize(24);
     ui->msgTable->verticalHeader()->hide(); // Usually we hide row headers if we use our own ID/Index
 
-    connect(ui->msgTable->selectionModel(), &QItemSelectionModel::selectionChanged,
-            this, &MessageListWidget::onSelectionChanged);
+    connect(ui->msgTable->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+        &MessageListWidget::onSelectionChanged);
 }
 
-MessageListWidget::~MessageListWidget()
-{
-    delete ui;
-}
+MessageListWidget::~MessageListWidget() { delete ui; }
 
-void MessageListWidget::attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer)
-{
-    m_model->setAnalyzer(analyzer);
-}
+void MessageListWidget::attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer) { m_model->setAnalyzer(analyzer); }
 
 void MessageListWidget::populateFrom(const std::vector<fastrace::TraceMessage>& messages)
 {
     // Legacy method. No longer used directly for UI population,
-    // as attachAnalyzer does it lazy-loaded. 
+    // as attachAnalyzer does it lazy-loaded.
     // Kept here if still needed by some other parts, but we can leave it empty
     // or log a warning since we use MessageTableModel now.
 }
 
-void MessageListWidget::clearTable()
-{
-    m_model->clear();
-}
+void MessageListWidget::clearTable() { m_model->clear(); }
 
 void MessageListWidget::onSelectionChanged()
 {

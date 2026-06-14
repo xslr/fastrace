@@ -1,16 +1,19 @@
 #pragma once
 #include <QWidget>
+
 #include "ArxmlTypes.h"
 #include "SignalDatabases.h"
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class LeftPanelWidget; }
+namespace Ui {
+class LeftPanelWidget;
+}
 QT_END_NAMESPACE
 
 class LeftPanelWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit LeftPanelWidget(QWidget *parent = nullptr);
+    explicit LeftPanelWidget(QWidget* parent = nullptr);
     ~LeftPanelWidget() override;
 
 private slots:
@@ -26,7 +29,7 @@ private:
     void populateEcusTab();
     void populateSomeIpTab();
 
-    Ui::LeftPanelWidget        *ui;
-    fastrace::SignalDatabases   m_signalDbs;
-    fastrace::ArDatabase        m_arxmlDb;
+    Ui::LeftPanelWidget* ui;
+    fastrace::SignalDatabases m_signalDbs;
+    fastrace::ArDatabase m_arxmlDb;
 };

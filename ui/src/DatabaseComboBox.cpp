@@ -4,28 +4,29 @@
 #include <QPainter>
 #include <QStyleOptionComboBox>
 
-DatabaseComboBox::DatabaseComboBox(QWidget *parent)
+DatabaseComboBox::DatabaseComboBox(QWidget* parent)
     : QComboBox(parent)
 {
 }
 
 void DatabaseComboBox::setActiveCount(int count)
 {
-    if (m_activeCount == count) return;
+    if (m_activeCount == count) {
+        return;
+    }
     m_activeCount = count;
     update(); // trigger repaint
 }
 
-void DatabaseComboBox::paintEvent(QPaintEvent * /*event*/)
+void DatabaseComboBox::paintEvent(QPaintEvent* /*event*/)
 {
     QStyleOptionComboBox opt;
     initStyleOption(&opt);
 
     // Override the display text based on active count
     if (m_activeCount > 0) {
-        opt.currentText = tr("%1 database%2")
-                              .arg(m_activeCount)
-                              .arg(m_activeCount == 1 ? QString() : QStringLiteral("s"));
+        opt.currentText
+            = tr("%1 database%2").arg(m_activeCount).arg(m_activeCount == 1 ? QString() : QStringLiteral("s"));
     } else {
         opt.currentText = tr("Select databases (ARXML)");
     }

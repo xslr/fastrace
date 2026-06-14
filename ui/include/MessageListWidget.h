@@ -1,20 +1,23 @@
 #pragma once
 #include <QWidget>
-#include "TraceMessage.h"
-#include <vector>
 #include <memory>
+#include <vector>
+
 #include "Analyzer.h"
+#include "TraceMessage.h"
 
 class MessageTableModel;
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class MessageListWidget; }
+namespace Ui {
+class MessageListWidget;
+}
 QT_END_NAMESPACE
 
 class MessageListWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit MessageListWidget(QWidget *parent = nullptr);
+    explicit MessageListWidget(QWidget* parent = nullptr);
     ~MessageListWidget() override;
 
 public slots:
@@ -36,6 +39,6 @@ private slots:
     void onSelectionChanged();
 
 private:
-    Ui::MessageListWidget *ui;
-    MessageTableModel *m_model;
+    Ui::MessageListWidget* ui;
+    MessageTableModel* m_model;
 };

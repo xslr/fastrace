@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# Run git-clang-format to format only the staged changes
+# The '--patch' flag shows what it changed.
+# The 'git commit' will fail if git-clang-format made any formatting changes.
+
+if ! git clang-format --commit HEAD ; then
+    echo "ERROR: Code formatting issues found."
+    echo "The files have been modified to the correct format."
+    echo "Please review the changes, run 'git add' on the affected files, and commit again."
+    exit 1
+fi
+
+exit 0

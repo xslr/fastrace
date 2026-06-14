@@ -2,17 +2,19 @@
 #include <QWidget>
 
 QT_BEGIN_NAMESPACE
-namespace Ui { class AnalyzerPreviewWidget; }
+namespace Ui {
+class AnalyzerPreviewWidget;
+}
 QT_END_NAMESPACE
 
 class AnalyzerPreviewWidget : public QWidget {
     Q_OBJECT
 public:
-    explicit AnalyzerPreviewWidget(QWidget *parent = nullptr);
+    explicit AnalyzerPreviewWidget(QWidget* parent = nullptr);
     ~AnalyzerPreviewWidget() override;
 
 private:
-    Ui::AnalyzerPreviewWidget *ui;
+    Ui::AnalyzerPreviewWidget* ui;
 
     void populateDetections();
     void populateStatistics();

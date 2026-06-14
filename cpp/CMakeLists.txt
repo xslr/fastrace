@@ -53,8 +53,6 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
   target_compile_options(sqlite3_amalg PRIVATE -w)
 endif()
 
-# Note: For prototype, assuming libraries are installed system-wide or via package manager.
-# CLI11 is header-only. libpqxx is for PostgreSQL.
 # Include directories
 include_directories(include)
 

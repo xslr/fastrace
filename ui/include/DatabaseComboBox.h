@@ -17,7 +17,7 @@
 class DatabaseComboBox : public QComboBox {
     Q_OBJECT
 public:
-    explicit DatabaseComboBox(QWidget *parent = nullptr);
+    explicit DatabaseComboBox(QWidget* parent = nullptr);
 
     /** Update the collapsed display; triggers a repaint. */
     void setActiveCount(int count);
@@ -25,7 +25,7 @@ public:
     int activeCount() const { return m_activeCount; }
 
 protected:
-    void paintEvent(QPaintEvent *event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     int m_activeCount = 0;

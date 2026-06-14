@@ -8,21 +8,25 @@ find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets Concurrent REQUIRED)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
+
+# Include directories
+include_directories(include)
+
 add_executable(fastrace_ui
     src/main.cpp
 
     # ── Core window ────────────────────────────────────────────────────────────
     src/MainWindow.cpp
-    src/MainWindow.h
+    include/MainWindow.h
 
     # ── Top bar (with Overview / Notebook toggle) ──────────────────────────────
     src/TopBarWidget.cpp
-    src/TopBarWidget.h
+    include/TopBarWidget.h
     src/TopBarWidget.ui
 
     # ── Custom DB combobox ────────────────────────────────────────────────────
     src/DatabaseComboBox.cpp
-    src/DatabaseComboBox.h
+    include/DatabaseComboBox.h
 
     # ── Shared left panel ─────────────────────────────────────────────────────
     # (LeftPanelWidget removed from build)
@@ -30,35 +34,35 @@ add_executable(fastrace_ui
 
     # ── Shared timeline ───────────────────────────────────────────────────────
     src/TimelineWidget.cpp
-    src/TimelineWidget.h
+    include/TimelineWidget.h
 
     # ── Shared message list ───────────────────────────────────────────────────
     src/MessageListWidget.cpp
-    src/MessageListWidget.h
+    include/MessageListWidget.h
     src/MessageTableModel.cpp
-    src/MessageTableModel.h
+    include/MessageTableModel.h
 
     # ── Overview-exclusive widgets ────────────────────────────────────────────
     src/MessageDetailsWidget.cpp
-    src/MessageDetailsWidget.h
+    include/MessageDetailsWidget.h
 
     src/DetectionsWidget.cpp
-    src/DetectionsWidget.h
+    include/DetectionsWidget.h
 
     # ── Notebook-exclusive widgets ────────────────────────────────────────────
     src/ScriptEditorWidget.cpp
-    src/ScriptEditorWidget.h
+    include/ScriptEditorWidget.h
 
     # ── Notebook block wrapper ────────────────────────────────────────────────
     src/NotebookBlockWidget.cpp
-    src/NotebookBlockWidget.h
+    include/NotebookBlockWidget.h
 
     # ── View layouts ──────────────────────────────────────────────────────────
     src/OverviewView.cpp
-    src/OverviewView.h
+    include/OverviewView.h
 
     src/NotebookView.cpp
-    src/NotebookView.h
+    include/NotebookView.h
 )
 
 qt_add_ui( fastrace_ui SOURCES

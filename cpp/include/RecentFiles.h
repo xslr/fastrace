@@ -9,8 +9,8 @@ namespace fastrace {
 struct RecentFileEntry {
     std::string path;
     std::string filename;
-    int64_t     sizeBytes    = -1;  // -1 = file not accessible
-    int64_t     modTimeUnix  = 0;   // seconds since Unix epoch; 0 = not accessible
+    int64_t sizeBytes = -1; // -1 = file not accessible
+    int64_t modTimeUnix = 0; // seconds since Unix epoch; 0 = not accessible
 };
 
 class RecentFiles {

@@ -1,17 +1,15 @@
 #include "OverviewView.h"
 
-#include "TimelineWidget.h"
-#include "MessageListWidget.h"
-#include "MessageDetailsWidget.h"
-#include "DetectionsWidget.h"
-
 #include <QSplitter>
 #include <QVBoxLayout>
 
-OverviewView::OverviewView(TimelineWidget       *sharedTimeline,
-                           MessageDetailsWidget *messageDetails,
-                           DetectionsWidget     *detectionsWidget,
-                           QWidget              *parent)
+#include "DetectionsWidget.h"
+#include "MessageDetailsWidget.h"
+#include "MessageListWidget.h"
+#include "TimelineWidget.h"
+
+OverviewView::OverviewView(TimelineWidget* sharedTimeline, MessageDetailsWidget* messageDetails,
+    DetectionsWidget* detectionsWidget, QWidget* parent)
     : QWidget(parent)
     , m_timeline(sharedTimeline)
     , m_messageDetails(messageDetails)
@@ -27,7 +25,7 @@ OverviewView::OverviewView(TimelineWidget       *sharedTimeline,
     m_rightSplitter->addWidget(m_detections);
     m_messageDetails->setParent(m_rightSplitter);
     m_rightSplitter->addWidget(m_messageDetails);
-    m_rightSplitter->setSizes({350, 300});
+    m_rightSplitter->setSizes({ 350, 300 });
 
     // ── Centre column: Timeline (top) + MessageList (bottom) ─────────────────
     // The timeline will be added during activate(), because it is shared and
@@ -43,33 +41,35 @@ OverviewView::OverviewView(TimelineWidget       *sharedTimeline,
     m_mainSplitter->setChildrenCollapsible(false);
     m_mainSplitter->addWidget(m_centreSplitter);
     m_mainSplitter->addWidget(m_rightSplitter);
-    m_mainSplitter->setSizes({750, 300});
+    m_mainSplitter->setSizes({ 750, 300 });
 
-    auto *layout = new QVBoxLayout(this);
+    auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_mainSplitter);
 
-    connect(m_messageList, &MessageListWidget::messageSelected,
-            m_messageDetails, &MessageDetailsWidget::updateFromMessage);
+    connect(
+        m_messageList, &MessageListWidget::messageSelected, m_messageDetails, &MessageDetailsWidget::updateFromMessage);
 }
 
 void OverviewView::activate()
 {
-    if (m_timeline->parent() == m_centreSplitter) return;
+    if (m_timeline->parent() == m_centreSplitter) {
+        return;
+    }
 
     // Insert the shared timeline at index 0 (above the message list)
     m_timeline->setParent(m_centreSplitter);
     m_centreSplitter->insertWidget(0, m_timeline);
-    m_centreSplitter->setSizes({400, 250});
+    m_centreSplitter->setSizes({ 400, 250 });
 }
 
 void OverviewView::deactivate()
 {
-    if (m_timeline->parent() != m_centreSplitter) return;
+    if (m_timeline->parent() != m_centreSplitter) {
+        return;
+    }
 
     // Detach without destroying
-    m_centreSplitter->widget(
-        m_centreSplitter->indexOf(m_timeline)
-    ); // just access to confirm it's there — no-op
+    m_centreSplitter->widget(m_centreSplitter->indexOf(m_timeline)); // just access to confirm it's there — no-op
     m_timeline->setParent(nullptr);
 }

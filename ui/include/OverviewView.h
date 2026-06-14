@@ -21,10 +21,8 @@ class DetectionsWidget;
 class OverviewView : public QWidget {
     Q_OBJECT
 public:
-    explicit OverviewView(TimelineWidget       *sharedTimeline,
-                          MessageDetailsWidget *messageDetails,
-                          DetectionsWidget     *detectionsWidget,
-                          QWidget              *parent = nullptr);
+    explicit OverviewView(TimelineWidget* sharedTimeline, MessageDetailsWidget* messageDetails,
+        DetectionsWidget* detectionsWidget, QWidget* parent = nullptr);
 
     /**
      * Call when the Overview becomes the active view.
@@ -39,15 +37,15 @@ public:
     void deactivate();
 
     /** The Overview's own MessageListWidget (filters independent of Notebook). */
-    MessageListWidget *messageList() const { return m_messageList; }
+    MessageListWidget* messageList() const { return m_messageList; }
 
 private:
-    TimelineWidget       *m_timeline;        ///< shared, re-parented here
-    MessageListWidget    *m_messageList;     ///< owned by this view
-    MessageDetailsWidget *m_messageDetails;
-    DetectionsWidget     *m_detections;
+    TimelineWidget* m_timeline; ///< shared, re-parented here
+    MessageListWidget* m_messageList; ///< owned by this view
+    MessageDetailsWidget* m_messageDetails;
+    DetectionsWidget* m_detections;
 
-    QSplitter *m_mainSplitter   = nullptr;
-    QSplitter *m_centreSplitter = nullptr;
-    QSplitter *m_rightSplitter  = nullptr;
+    QSplitter* m_mainSplitter = nullptr;
+    QSplitter* m_centreSplitter = nullptr;
+    QSplitter* m_rightSplitter = nullptr;
 };

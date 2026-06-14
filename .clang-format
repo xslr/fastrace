@@ -1,0 +1,11 @@
+---
+BasedOnStyle: Webkit
+ColumnLimit: 120
+IndentWidth: 4
+
+# always use braces on if blocks
+InsertBraces: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortBlocksOnASingleLine: Never
+...
+

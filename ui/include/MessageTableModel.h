@@ -3,9 +3,10 @@
 #include <QAbstractTableModel>
 #include <QVector>
 #include <map>
-#include <set>
-#include <optional>
 #include <memory>
+#include <optional>
+#include <set>
+
 #include "Analyzer.h"
 #include "TraceMessage.h"
 
@@ -34,8 +35,9 @@ private:
     static constexpr size_t MAX_CACHED_CHUNKS = 3;
 
     std::shared_ptr<fastrace::Analyzer> m_analyzer;
-    
-    // Mutable because they are modified in the const data() method when cache misses
+
+    // Mutable because they are modified in the const data() method when cache
+    // misses
     mutable std::map<size_t, std::vector<fastrace::TraceMessage>> m_cache;
     mutable std::set<size_t> m_pending;
 };

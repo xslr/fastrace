@@ -1,16 +1,14 @@
 #include "NotebookBlockWidget.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
+#include <QApplication>
 #include <QFrame>
-#include <QPushButton>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
-#include <QApplication>
+#include <QPushButton>
+#include <QVBoxLayout>
 
-NotebookBlockWidget::NotebookBlockWidget(const QString &title,
-                                         QWidget *contentWidget,
-                                         QWidget *parent)
+NotebookBlockWidget::NotebookBlockWidget(const QString& title, QWidget* contentWidget, QWidget* parent)
     : QWidget(parent)
     , m_title(title)
     , m_content(contentWidget)
@@ -34,7 +32,7 @@ void NotebookBlockWidget::buildHeader()
     m_headerFrame->setFixedHeight(34);
     m_headerFrame->setCursor(Qt::SizeAllCursor);
 
-    auto *headerLayout = new QHBoxLayout(m_headerFrame);
+    auto* headerLayout = new QHBoxLayout(m_headerFrame);
     headerLayout->setContentsMargins(8, 0, 8, 0);
     headerLayout->setSpacing(4);
 
@@ -46,14 +44,14 @@ void NotebookBlockWidget::buildHeader()
     headerLayout->addWidget(m_handleLabel);
 
     // Left colour accent bar
-    auto *accent = new QFrame(m_headerFrame);
+    auto* accent = new QFrame(m_headerFrame);
     accent->setObjectName("blockAccent");
     accent->setFixedWidth(3);
     accent->setFixedHeight(18);
     headerLayout->addWidget(accent);
 
     // Title
-    auto *titleLabel = new QLabel(m_title, m_headerFrame);
+    auto* titleLabel = new QLabel(m_title, m_headerFrame);
     titleLabel->setObjectName("blockTitle");
     headerLayout->addWidget(titleLabel);
 
@@ -78,9 +76,7 @@ void NotebookBlockWidget::buildHeader()
     m_deleteBtn->setObjectName("blockIconBtn");
     m_deleteBtn->setFixedSize(24, 24);
     m_deleteBtn->setToolTip(tr("Remove block"));
-    connect(m_deleteBtn, &QPushButton::clicked, this, [this]() {
-        emit deleteRequested(this);
-    });
+    connect(m_deleteBtn, &QPushButton::clicked, this, [this]() { emit deleteRequested(this); });
     headerLayout->addWidget(m_deleteBtn);
 
     m_outerLayout->addWidget(m_headerFrame);
@@ -93,26 +89,25 @@ void NotebookBlockWidget::toggleCollapse()
     m_collapseBtn->setText(m_collapsed ? "▶" : "▼");
 }
 
-// ── Drag-and-drop wiring ──────────────────────────────────────────────────────
+// ── Drag-and-drop wiring
+// ──────────────────────────────────────────────────────
 
-void NotebookBlockWidget::mousePressEvent(QMouseEvent *event)
+void NotebookBlockWidget::mousePressEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
         m_dragStart = event->pos();
-        m_dragging  = false;
+        m_dragging = false;
     }
     QWidget::mousePressEvent(event);
 }
 
-void NotebookBlockWidget::mouseMoveEvent(QMouseEvent *event)
+void NotebookBlockWidget::mouseMoveEvent(QMouseEvent* event)
 {
     if (!(event->buttons() & Qt::LeftButton)) {
         QWidget::mouseMoveEvent(event);
         return;
     }
-    if (!m_dragging &&
-        (event->pos() - m_dragStart).manhattanLength()
-            >= QApplication::startDragDistance()) {
+    if (!m_dragging && (event->pos() - m_dragStart).manhattanLength() >= QApplication::startDragDistance()) {
         m_dragging = true;
         emit dragStarted(this);
     }

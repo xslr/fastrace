@@ -1,12 +1,15 @@
 #pragma once
 
-#include <QMainWindow>
 #include <QFutureWatcher>
+#include <QMainWindow>
 #include <array>
 #include <memory>
-#include "TopBarWidget.h"   // for ViewMode
 
-namespace fastrace { class Analyzer; }
+#include "TopBarWidget.h" // for ViewMode
+
+namespace fastrace {
+class Analyzer;
+}
 
 class TopBarWidget;
 class TimelineWidget;
@@ -26,7 +29,7 @@ class QPropertyAnimation;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override = default;
 
 private slots:
@@ -43,42 +46,42 @@ private:
     void showLoadedState(size_t messageCount, size_t finalSpeedMsgPerSec);
 
     // ── Shared widgets ────────────────────────────────────────────────────────
-    TopBarWidget          *m_topBar         = nullptr;
-    TimelineWidget        *m_timeline       = nullptr;
+    TopBarWidget* m_topBar = nullptr;
+    TimelineWidget* m_timeline = nullptr;
 
     // ── Overview-exclusive widgets ────────────────────────────────────────────
-    MessageDetailsWidget  *m_messageDetails = nullptr;
-    DetectionsWidget      *m_detections     = nullptr;
+    MessageDetailsWidget* m_messageDetails = nullptr;
+    DetectionsWidget* m_detections = nullptr;
 
     // ── Notebook-exclusive widgets ────────────────────────────────────────────
-    ScriptEditorWidget    *m_scriptEditor   = nullptr;
+    ScriptEditorWidget* m_scriptEditor = nullptr;
 
     // ── Views ─────────────────────────────────────────────────────────────────
-    OverviewView          *m_overviewView   = nullptr;
-    NotebookView          *m_notebookView   = nullptr;
+    OverviewView* m_overviewView = nullptr;
+    NotebookView* m_notebookView = nullptr;
 
     // ── Central stacked widget ────────────────────────────────────────────────
-    QStackedWidget        *m_stack          = nullptr;
+    QStackedWidget* m_stack = nullptr;
 
     // ── Status bar widgets ────────────────────────────────────────────────────
-    QProgressBar          *m_progressBar    = nullptr;
-    QLabel                *m_statusLabel    = nullptr;
+    QProgressBar* m_progressBar = nullptr;
+    QLabel* m_statusLabel = nullptr;
 
     // ── Async loading ─────────────────────────────────────────────────────────
     std::shared_ptr<fastrace::Analyzer> m_analyzer;
-    QFutureWatcher<void>               *m_watcher   = nullptr;
-    QTimer                             *m_pollTimer  = nullptr;
+    QFutureWatcher<void>* m_watcher = nullptr;
+    QTimer* m_pollTimer = nullptr;
 
     // ── Msg/s rolling average (N=5 samples at 100 ms each) ───────────────────
     static constexpr int kSpeedSamples = 5;
-    std::array<size_t, kSpeedSamples> m_msgSamples{};
-    int    m_sampleIdx   = 0;
+    std::array<size_t, kSpeedSamples> m_msgSamples {};
+    int m_sampleIdx = 0;
     size_t m_prevMsgCount = 0;
-    bool   m_samplesReady = false;   ///< true once ring buffer is full
+    bool m_samplesReady = false; ///< true once ring buffer is full
 
     // ── Post-load speed fade-out ──────────────────────────────────────────────
-    QTimer          *m_fadeOutTimer    = nullptr;  ///< 2 s single-shot after load done
-    QPropertyAnimation *m_fadeAnim     = nullptr;  ///< 500 ms opacity animation
-    QString          m_loadedBaseLabel;             ///< cached "🟢 … messages" text
-    QString          m_loadingBaseLabel;            ///< cached "Loading foo.blf…" text
+    QTimer* m_fadeOutTimer = nullptr; ///< 2 s single-shot after load done
+    QPropertyAnimation* m_fadeAnim = nullptr; ///< 500 ms opacity animation
+    QString m_loadedBaseLabel; ///< cached "🟢 … messages" text
+    QString m_loadingBaseLabel; ///< cached "Loading foo.blf…" text
 };
