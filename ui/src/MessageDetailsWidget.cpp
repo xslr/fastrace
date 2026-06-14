@@ -10,11 +10,9 @@ MessageDetailsWidget::MessageDetailsWidget(QWidget *parent)
 
     ui->generalHeader->setObjectName("headerLabel");
     ui->hexHeader->setObjectName("headerLabel");
-    ui->binHeader->setObjectName("headerLabel");
     ui->signalsHeader->setObjectName("headerLabel");
 
     ui->hexDataLabel->setObjectName("codeLabel");
-    ui->binDataLabel->setObjectName("codeLabel");
 
     ui->generalProps->horizontalHeader()->setVisible(false);
     ui->generalProps->verticalHeader()->setVisible(false);
@@ -63,10 +61,6 @@ void MessageDetailsWidget::populateGeneralProps()
     t->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
 
     ui->hexDataLabel->setText("3C 9A 10 27 00 64 FF 80");
-    ui->binDataLabel->setText(
-        "0011 1100  1001 1010  0001 0000\n"
-        "0010 0111  0000 0000  0110 0100\n"
-        "1111 1111  1000 0000");
 }
 
 void MessageDetailsWidget::populateSignalsTable()
