@@ -208,17 +208,34 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
   BlfObjectHeaderBase base;
   bool firstObject = true;
   while (!cur.eof()) {
-    if (!findNextLobj(cur, base.signature)) break;
+    const char* loopStart = cur.pos;
+
+    if (!findNextLobj(cur, base.signature)) {
+      if (firstObject) {
+        if (headFragOut)
+          headFragOut->assign(data, data + dataLen);
+      } else {
+        if (tailFragOut && loopStart < data + dataLen)
+          tailFragOut->assign(loopStart, data + dataLen);
+      }
+      break;
+    }
 
     if (firstObject) {
       firstObject = false;
       const size_t firstLobjAt = cur.tell() - 4;
-      if (firstLobjAt > 0 && headFragOut)
+      if (headFragOut)
         headFragOut->assign(data, data + firstLobjAt);
     }
 
     if (!cur.read(reinterpret_cast<char*>(&base) + 4,
-                  sizeof(BlfObjectHeaderBase) - 4)) break;
+                  sizeof(BlfObjectHeaderBase) - 4)) {
+      if (tailFragOut) {
+        const char* objStart = cur.pos - 4;
+        tailFragOut->assign(objStart, data + dataLen);
+      }
+      break;
+    }
 
     // -----------------------------------------------------------------------
     // Cross-container split detection.
