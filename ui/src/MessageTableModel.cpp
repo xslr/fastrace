@@ -133,21 +133,30 @@ QVariant MessageTableModel::data(const QModelIndex& index, int role) const
                     case CAN_MESSAGE2: return "CAN";
                     case CAN_FD_MESSAGE:
                     case CAN_FD_MESSAGE_64: return "CAN FD";
-                    case ETHERNET_FRAME:
-                    case ETHERNET_FRAME_EX: return "Ethernet";
+                    case ETHERNET_FRAME_EX:
+                    case ETHERNET_FRAME_FORWARDED: return "Ethernet";
                     default: return "Other";
                 }
             }
             case 2: {
-                if (msg.objectType == ETHERNET_FRAME || msg.objectType == ETHERNET_FRAME_EX) {
+                if (msg.objectType == ETHERNET_FRAME_EX || msg.objectType == ETHERNET_FRAME_FORWARDED) {
                     return QString("CH%1").arg(msg.channel);
-                } else {
+                } else if (msg.objectType == CAN_MESSAGE || msg.objectType == CAN_MESSAGE2 || msg.objectType == CAN_FD_MESSAGE || msg.objectType == CAN_FD_MESSAGE_64) {
                     QString idStr = "0x" + QString::number(msg.arbId, 16).toUpper();
                     if (msg.extendedId) idStr += "x";
                     return idStr;
+                } else {
+                    return QString();
                 }
             }
-            case 3: return QString(); // Name (TODO: Symbol decoding)
+            case 3: {
+                // For non-CAN/ETH objects, we can show the object type name here.
+                std::string_view name = fastrace::objectTypeName(msg.objectType);
+                if (!name.empty()) {
+                    return QString::fromUtf8(name.data(), name.size());
+                }
+                return QString("Type %1").arg(msg.objectType);
+            }
             case 4: return QString::number(msg.dlc);
             case 5: {
                 QString dataHex;

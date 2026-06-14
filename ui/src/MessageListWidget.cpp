@@ -16,7 +16,7 @@ MessageListWidget::MessageListWidget(QWidget *parent)
     ui->msgTable->setModel(m_model);
     ui->msgTable->horizontalHeader()->setStretchLastSection(true);
     ui->msgTable->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
-    
+
     // Set fixed row height for performance
     ui->msgTable->verticalHeader()->setDefaultSectionSize(24);
     ui->msgTable->verticalHeader()->hide(); // Usually we hide row headers if we use our own ID/Index
