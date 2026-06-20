@@ -39,7 +39,8 @@
 
 namespace fastrace {
 
-static ProtocolGroup protocolGroupOf(uint32_t objectType) {
+static ProtocolGroup protocolGroupOf(uint32_t objectType)
+{
     switch (objectType) {
     case CAN_MESSAGE:
     case CAN_MESSAGE2:
@@ -1359,7 +1360,7 @@ void Analyzer::buildHistogram(int numBins)
     if (histogram_.binWidthUs == 0) {
         histogram_.binWidthUs = 1; // Prevent div by 0
     }
-    
+
     // The total bins could be slightly more than numBins due to integer division truncation
     size_t actualBins = durationUs / histogram_.binWidthUs + 1;
 

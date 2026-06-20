@@ -20,11 +20,7 @@ struct ChunkEntry {
     uint32_t skipMessages; // messages before chunk start inside the container
 };
 
-enum class ProtocolGroup : uint8_t {
-    CAN,
-    Ethernet,
-    COUNT
-};
+enum class ProtocolGroup : uint8_t { CAN, Ethernet, COUNT };
 
 struct HistogramData {
     uint64_t binWidthUs = 0;
