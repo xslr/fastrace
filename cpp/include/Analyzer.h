@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -17,6 +18,19 @@ struct ChunkEntry {
     size_t fileOffset; // byte offset of container in mmap
     uint64_t containerIndex; // 0-based container sequence number
     uint32_t skipMessages; // messages before chunk start inside the container
+};
+
+enum class ProtocolGroup : uint8_t {
+    CAN,
+    Ethernet,
+    COUNT
+};
+
+struct HistogramData {
+    uint64_t binWidthUs = 0;
+    uint64_t traceStartUs = 0;
+    uint64_t traceEndUs = 0;
+    std::array<std::vector<uint32_t>, static_cast<size_t>(ProtocolGroup::COUNT)> bins;
 };
 
 struct PerfCounters {
@@ -41,6 +55,8 @@ public:
     // ── Async loading support ────────────────────────────────────────────────
     /// Set to true by the UI thread to request early termination of processFile.
     std::atomic<bool> cancelled { false };
+    /// Set to true by the UI thread to request early termination of buildHistogram.
+    std::atomic<bool> histogramCancelled { false };
     /// Bytes consumed by the producer so far (updated each container push).
     std::atomic<size_t> bytesRead { 0 };
     /// Total file size in bytes; set once at the start of processFile.
@@ -57,15 +73,18 @@ public:
 
     size_t buildIndex(const std::string& filename);
 
-    // Get the chunk index
     const std::vector<ChunkEntry>& getChunkIndex() const { return chunkIndex_; }
+    const HistogramData& histogram() const { return histogram_; }
     std::vector<TraceMessage> decodeChunk(size_t chunkIndex) const;
     size_t totalMessages() const noexcept { return totalMessages_; }
+
+    void buildHistogram(int numBins);
 
     void processFile(const std::string& filename);
 
 private:
     std::vector<ChunkEntry> chunkIndex_;
+    HistogramData histogram_;
     size_t totalMessages_ = 0;
     MappedFile mf_;
 };

@@ -57,6 +57,10 @@ add_executable(fastrace_ui
     src/NotebookBlockWidget.cpp
     include/NotebookBlockWidget.h
 
+    # ── Overview heatmap widget ───────────────────────────────────────────────
+    src/TimelineOverviewWidget.cpp
+    include/TimelineOverviewWidget.h
+
     # ── View layouts ──────────────────────────────────────────────────────────
     src/OverviewView.cpp
     include/OverviewView.h

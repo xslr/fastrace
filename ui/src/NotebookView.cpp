@@ -7,16 +7,20 @@
 #include <QScrollArea>
 #include <QSpacerItem>
 #include <QVBoxLayout>
+#include <QVariant>
 
 #include "MessageListWidget.h"
 #include "NotebookBlockWidget.h"
 #include "ScriptEditorWidget.h"
+#include "TimelineOverviewWidget.h"
 #include "TimelineWidget.h"
 
 // ── Construction ─────────────────────────────────────────────────────────────
 
-NotebookView::NotebookView(TimelineWidget* sharedTimeline, ScriptEditorWidget* scriptEditor, QWidget* parent)
+NotebookView::NotebookView(TimelineOverviewWidget* timelineOverview, TimelineWidget* sharedTimeline,
+    ScriptEditorWidget* scriptEditor, QWidget* parent)
     : QWidget(parent)
+    , m_timelineOverview(timelineOverview)
     , m_timeline(sharedTimeline)
     , m_scriptEditor(scriptEditor)
 {
@@ -104,19 +108,23 @@ NotebookView::NotebookView(TimelineWidget* sharedTimeline, ScriptEditorWidget* s
 
 void NotebookView::activate()
 {
-    // If the shared timeline is already in a block, do nothing.
-    // Otherwise, wrap it in a block and insert at the top.
+    // Overview widget is inserted at the top of the canvas
+    if (m_timelineOverview) {
+        if (m_timelineOverview->parent() != m_canvas) {
+            m_timelineOverview->setParent(m_canvas);
+            m_canvasLayout->insertWidget(0, m_timelineOverview);
+            m_timelineOverview->show();
+        }
+    }
+
     if (m_timeline->parent() == this) {
         return;
     }
 
-    // Re-parent the timeline into the notebook canvas, wrapped in a block.
     auto* block = wrapInBlock("Signal View", m_timeline);
-    // Insert before the trailing stretch (which is always the last item)
     m_canvasLayout->insertWidget(m_canvasLayout->count() - 1, block);
     m_blocks.prepend(block);
 
-    // Also add the message list block if not already present
     bool msgBlockPresent = false;
     for (auto* b : m_blocks) {
         if (b->contentWidget() == m_messageList) {
@@ -130,7 +138,6 @@ void NotebookView::activate()
         m_blocks.append(msgBlock);
     }
 
-    // Also add the script editor block if not already present
     bool scriptBlockPresent = false;
     for (auto* b : m_blocks) {
         if (b->contentWidget() == m_scriptEditor) {
@@ -147,18 +154,17 @@ void NotebookView::activate()
 
 void NotebookView::deactivate()
 {
-    // Remove the shared timeline block from our layout so the Overview can
-    // re-parent it.  We keep the block object alive but hidden; the block
-    // will be re-created on the next activate() if needed.
+    if (m_timelineOverview) {
+        m_timelineOverview->setParent(nullptr);
+    }
     for (int i = 0; i < m_blocks.size(); ++i) {
         auto* block = m_blocks[i];
         if (block->contentWidget() == m_timeline) {
             m_canvasLayout->removeWidget(block);
-            block->setParent(nullptr); // detach from layout / this
+            block->setParent(nullptr);
             m_blocks.removeAt(i);
-            // Move the timeline out of the block so it survives
             m_timeline->setParent(nullptr);
-            block->deleteLater(); // delete the wrapper shell
+            block->deleteLater();
             break;
         }
     }

@@ -5,6 +5,7 @@
 class QScrollArea;
 class QVBoxLayout;
 class NotebookBlockWidget;
+class TimelineOverviewWidget;
 class TimelineWidget;
 class MessageListWidget;
 class ScriptEditorWidget;
@@ -29,13 +30,15 @@ class NotebookView : public QWidget {
     Q_OBJECT
 public:
     /**
+     * @param timelineOverview Shared TimelineOverviewWidget
      * @param sharedTimeline  The single TimelineWidget instance shared across
      * views. NotebookView will re-parent it when activated.
      * @param scriptEditor    ScriptEditorWidget owned exclusively by the
      * Notebook.
      * @param parent          Parent widget.
      */
-    explicit NotebookView(TimelineWidget* sharedTimeline, ScriptEditorWidget* scriptEditor, QWidget* parent = nullptr);
+    explicit NotebookView(TimelineOverviewWidget* timelineOverview, TimelineWidget* sharedTimeline,
+        ScriptEditorWidget* scriptEditor, QWidget* parent = nullptr);
 
     /**
      * Call this when the Notebook view becomes active so that the shared
@@ -65,6 +68,7 @@ private:
     void appendBlock(NotebookBlockWidget* block);
 
     // ── Shared / owned widgets ────────────────────────────────────────────────
+    TimelineOverviewWidget* m_timelineOverview = nullptr; ///< shared, re-parented
     TimelineWidget* m_timeline = nullptr; ///< shared, re-parented
     MessageListWidget* m_messageList = nullptr; ///< owned by this view
     ScriptEditorWidget* m_scriptEditor = nullptr; ///< owned by this view

@@ -2,6 +2,7 @@
 #include <QWidget>
 
 class QSplitter;
+class TimelineOverviewWidget;
 class TimelineWidget;
 class MessageListWidget;
 class MessageDetailsWidget;
@@ -21,8 +22,8 @@ class DetectionsWidget;
 class OverviewView : public QWidget {
     Q_OBJECT
 public:
-    explicit OverviewView(TimelineWidget* sharedTimeline, MessageDetailsWidget* messageDetails,
-        DetectionsWidget* detectionsWidget, QWidget* parent = nullptr);
+    explicit OverviewView(TimelineOverviewWidget* timelineOverview, TimelineWidget* sharedTimeline,
+        MessageDetailsWidget* messageDetails, DetectionsWidget* detectionsWidget, QWidget* parent = nullptr);
 
     /**
      * Call when the Overview becomes the active view.
@@ -40,6 +41,7 @@ public:
     MessageListWidget* messageList() const { return m_messageList; }
 
 private:
+    TimelineOverviewWidget* m_timelineOverview;
     TimelineWidget* m_timeline; ///< shared, re-parented here
     MessageListWidget* m_messageList; ///< owned by this view
     MessageDetailsWidget* m_messageDetails;

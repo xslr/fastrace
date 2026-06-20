@@ -18,6 +18,7 @@
 #include "NotebookView.h"
 #include "OverviewView.h"
 #include "ScriptEditorWidget.h"
+#include "TimelineOverviewWidget.h"
 #include "TimelineWidget.h"
 #include "TopBarWidget.h"
 
@@ -32,6 +33,7 @@ MainWindow::MainWindow(QWidget* parent)
     setMenuWidget(m_topBar);
 
     // ── Shared widgets ────────────────────────────────────────────────────────
+    m_timelineOverview = new TimelineOverviewWidget(this);
     m_timeline = new TimelineWidget;
 
     // ── Overview-exclusive widgets ────────────────────────────────────────────
@@ -42,9 +44,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_scriptEditor = new ScriptEditorWidget;
 
     // ── Construct the two views ───────────────────────────────────────────────
-    m_overviewView = new OverviewView(m_timeline, m_messageDetails, m_detections);
+    m_overviewView = new OverviewView(m_timelineOverview, m_timeline, m_messageDetails, m_detections);
 
-    m_notebookView = new NotebookView(m_timeline, m_scriptEditor);
+    m_notebookView = new NotebookView(m_timelineOverview, m_timeline, m_scriptEditor);
 
     // ── Stacked widget ────────────────────────────────────────────────────────
     m_stack = new QStackedWidget;
@@ -71,7 +73,12 @@ MainWindow::MainWindow(QWidget* parent)
     auto* sb = new QStatusBar;
     sb->addWidget(m_progressBar);
     sb->addWidget(m_statusLabel);
-    sb->addPermanentWidget(new QLabel("Window: 10 s     Cursor: 00:00:00.000000"));
+
+    m_timeBoundsLabel = new QLabel("");
+    m_timeBoundsLabel->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_timeBoundsLabel, &QWidget::customContextMenuRequested, this, &MainWindow::onTimeBoundsContextMenu);
+    sb->addPermanentWidget(m_timeBoundsLabel);
+
     setStatusBar(sb);
 
     // ── Async loading: future watcher ─────────────────────────────────────────
@@ -115,11 +122,14 @@ MainWindow::MainWindow(QWidget* parent)
         m_fadeAnim = nullptr; // will self-delete
     });
 
-    // ── Connect mode toggle ───────────────────────────────────────────────────
+    // ── Signal connections ────────────────────────────────────────────────────
     connect(m_topBar, &TopBarWidget::modeChanged, this, &MainWindow::onModeChanged);
-
-    // ── Connect trace file selection ──────────────────────────────────────────
     connect(m_topBar, &TopBarWidget::traceFileChanged, this, &MainWindow::onTraceFileChanged);
+
+    connect(m_timelineOverview, &TimelineOverviewWidget::navigateRequested, this, [](uint64_t timestampUs) {
+        // spdlog::info("TimelineOverviewWidget requested navigation to {} us", timestampUs);
+        // TODO: m_timeline->setCursor(timestampUs);
+    });
 }
 
 // ── Mode switch
@@ -277,6 +287,9 @@ void MainWindow::onLoadFinished()
     // Attach the shared Analyzer to the message lists for lazy loading.
     m_overviewView->messageList()->attachAnalyzer(m_analyzer);
     m_notebookView->messageList()->attachAnalyzer(m_analyzer);
+    m_timelineOverview->attachAnalyzer(m_analyzer);
+
+    updateTimeBoundsLabel();
 
     showLoadedState(m_analyzer->totalMessages(), finalSpeed);
 }
@@ -310,4 +323,40 @@ void MainWindow::showLoadedState(size_t messageCount, size_t finalSpeedMsgPerSec
 
     // After 2 s, fade the msg/s portion out over 500 ms.
     m_fadeOutTimer->start();
+}
+
+void MainWindow::onTimeBoundsContextMenu(const QPoint& /*pos*/)
+{
+    m_absoluteTimestamps = !m_absoluteTimestamps;
+    updateTimeBoundsLabel();
+}
+
+void MainWindow::updateTimeBoundsLabel()
+{
+    if (!m_analyzer || m_analyzer->histogram().traceEndUs <= m_analyzer->histogram().traceStartUs) {
+        m_timeBoundsLabel->setText("");
+        return;
+    }
+
+    const auto& hist = m_analyzer->histogram();
+
+    auto formatTs = [](uint64_t us) -> QString {
+        const int h = static_cast<int>(us / 3'600'000'000ull);
+        const int m = static_cast<int>((us % 3'600'000'000ull) / 60'000'000ull);
+        const int s = static_cast<int>((us % 60'000'000ull) / 1'000'000ull);
+        const int us6 = static_cast<int>(us % 1'000'000ull);
+        return QString("%1:%2:%3.%4")
+            .arg(h, 2, 10, QChar('0'))
+            .arg(m, 2, 10, QChar('0'))
+            .arg(s, 2, 10, QChar('0'))
+            .arg(us6, 6, 10, QChar('0'));
+    };
+
+    if (m_absoluteTimestamps) {
+        m_timeBoundsLabel->setText(
+            QString("Start: %1     End: %2").arg(formatTs(hist.traceStartUs)).arg(formatTs(hist.traceEndUs)));
+    } else {
+        m_timeBoundsLabel->setText(
+            QString("Start: 00:00:00.000000     End: %1").arg(formatTs(hist.traceEndUs - hist.traceStartUs)));
+    }
 }

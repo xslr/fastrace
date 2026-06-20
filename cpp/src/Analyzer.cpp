@@ -39,6 +39,22 @@
 
 namespace fastrace {
 
+static ProtocolGroup protocolGroupOf(uint32_t objectType) {
+    switch (objectType) {
+    case CAN_MESSAGE:
+    case CAN_MESSAGE2:
+    case CAN_FD_MESSAGE:
+    case CAN_FD_MESSAGE_64:
+        return ProtocolGroup::CAN;
+    case ETHERNET_FRAME:
+    case ETHERNET_FRAME_EX:
+    case ETHERNET_FRAME_FORWARDED:
+        return ProtocolGroup::Ethernet;
+    default:
+        return ProtocolGroup::COUNT;
+    }
+}
+
 // ratio used to allocate buffer for decompressed data. if insufficient, a
 // reallocation would be triggered based on real traces, compressed objects seem
 // to have a compression ratio of 4.5.
@@ -1313,12 +1329,60 @@ size_t Analyzer::buildIndex(const std::string& filename)
     }
 
     totalMessages_ = cumulativeMessages;
+
+    // --- Histogram bounds initialization ---
+    if (!chunkIndex_.empty()) {
+        auto firstChunk = decodeChunk(0);
+        auto lastChunk = decodeChunk(chunkIndex_.size() - 1);
+        if (!firstChunk.empty() && !lastChunk.empty()) {
+            histogram_.traceStartUs = firstChunk.front().timestampUs;
+            histogram_.traceEndUs = lastChunk.back().timestampUs;
+        }
+    }
+
     auto t1 = Clock::now();
     spdlog::info("buildIndex done: scanned {} containers, {} messages, {} index chunks in {:.2f} ms",
         containerCounts.size(), totalMessages_, chunkIndex_.size(),
         std::chrono::duration<double, std::milli>(t1 - t0).count());
 
     return totalMessages_;
+}
+
+void Analyzer::buildHistogram(int numBins)
+{
+    if (numBins <= 0 || chunkIndex_.empty() || histogram_.traceEndUs <= histogram_.traceStartUs) {
+        return;
+    }
+
+    uint64_t durationUs = histogram_.traceEndUs - histogram_.traceStartUs;
+    histogram_.binWidthUs = durationUs / numBins;
+    if (histogram_.binWidthUs == 0) {
+        histogram_.binWidthUs = 1; // Prevent div by 0
+    }
+    
+    // The total bins could be slightly more than numBins due to integer division truncation
+    size_t actualBins = durationUs / histogram_.binWidthUs + 1;
+
+    for (auto& vec : histogram_.bins) {
+        vec.assign(actualBins, 0);
+    }
+
+    for (size_t i = 0; i < chunkIndex_.size(); ++i) {
+        if (histogramCancelled.load(std::memory_order_relaxed)) {
+            break;
+        }
+        auto msgs = decodeChunk(i);
+        for (const auto& msg : msgs) {
+            ProtocolGroup group = protocolGroupOf(msg.objectType);
+            if (group != ProtocolGroup::COUNT) {
+                uint64_t clampedTs = std::max(msg.timestampUs, histogram_.traceStartUs);
+                size_t binIndex = (clampedTs - histogram_.traceStartUs) / histogram_.binWidthUs;
+                if (binIndex < actualBins) {
+                    histogram_.bins[static_cast<size_t>(group)][binIndex]++;
+                }
+            }
+        }
+    }
 }
 
 std::vector<TraceMessage> Analyzer::decodeChunk(size_t chunkIndex) const

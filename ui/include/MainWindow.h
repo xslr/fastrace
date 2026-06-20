@@ -12,6 +12,7 @@ class Analyzer;
 }
 
 class TopBarWidget;
+class TimelineOverviewWidget;
 class TimelineWidget;
 class MessageListWidget;
 class MessageDetailsWidget;
@@ -37,6 +38,7 @@ private slots:
     void onTraceFileChanged(const QString& path);
     void onLoadFinished();
     void onPollProgress();
+    void onTimeBoundsContextMenu(const QPoint& pos);
 
 private:
     void startLoad(const QString& path);
@@ -44,9 +46,11 @@ private:
     void resetSpeedState();
     void showLoadingState(const QString& filename);
     void showLoadedState(size_t messageCount, size_t finalSpeedMsgPerSec);
+    void updateTimeBoundsLabel();
 
     // ── Shared widgets ────────────────────────────────────────────────────────
     TopBarWidget* m_topBar = nullptr;
+    TimelineOverviewWidget* m_timelineOverview = nullptr;
     TimelineWidget* m_timeline = nullptr;
 
     // ── Overview-exclusive widgets ────────────────────────────────────────────
@@ -66,6 +70,8 @@ private:
     // ── Status bar widgets ────────────────────────────────────────────────────
     QProgressBar* m_progressBar = nullptr;
     QLabel* m_statusLabel = nullptr;
+    QLabel* m_timeBoundsLabel = nullptr;
+    bool m_absoluteTimestamps = false;
 
     // ── Async loading ─────────────────────────────────────────────────────────
     std::shared_ptr<fastrace::Analyzer> m_analyzer;

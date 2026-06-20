@@ -6,11 +6,13 @@
 #include "DetectionsWidget.h"
 #include "MessageDetailsWidget.h"
 #include "MessageListWidget.h"
+#include "TimelineOverviewWidget.h"
 #include "TimelineWidget.h"
 
-OverviewView::OverviewView(TimelineWidget* sharedTimeline, MessageDetailsWidget* messageDetails,
-    DetectionsWidget* detectionsWidget, QWidget* parent)
+OverviewView::OverviewView(TimelineOverviewWidget* timelineOverview, TimelineWidget* sharedTimeline,
+    MessageDetailsWidget* messageDetails, DetectionsWidget* detectionsWidget, QWidget* parent)
     : QWidget(parent)
+    , m_timelineOverview(timelineOverview)
     , m_timeline(sharedTimeline)
     , m_messageDetails(messageDetails)
     , m_detections(detectionsWidget)
@@ -53,23 +55,24 @@ OverviewView::OverviewView(TimelineWidget* sharedTimeline, MessageDetailsWidget*
 
 void OverviewView::activate()
 {
-    if (m_timeline->parent() == m_centreSplitter) {
-        return;
+    // Insert overview at the very top of centre splitter (index 0)
+    if (m_timelineOverview) {
+        m_centreSplitter->insertWidget(0, m_timelineOverview);
+        m_timelineOverview->show();
     }
-
-    // Insert the shared timeline at index 0 (above the message list)
-    m_timeline->setParent(m_centreSplitter);
-    m_centreSplitter->insertWidget(0, m_timeline);
-    m_centreSplitter->setSizes({ 400, 250 });
+    // Shared TimelineWidget becomes a child of the centre splitter (index 1)
+    if (m_timeline) {
+        m_centreSplitter->insertWidget(1, m_timeline);
+        m_timeline->show();
+    }
 }
 
 void OverviewView::deactivate()
 {
-    if (m_timeline->parent() != m_centreSplitter) {
-        return;
+    if (m_timelineOverview) {
+        m_timelineOverview->setParent(nullptr);
     }
-
-    // Detach without destroying
-    m_centreSplitter->widget(m_centreSplitter->indexOf(m_timeline)); // just access to confirm it's there — no-op
-    m_timeline->setParent(nullptr);
+    if (m_timeline) {
+        m_timeline->setParent(nullptr);
+    }
 }
