@@ -17,6 +17,10 @@ TimelineOverviewWidget::TimelineOverviewWidget(QWidget* parent)
 {
     setMinimumHeight(80);
     setMouseTracking(true);
+    setAutoFillBackground(true);
+    setStyleSheet("TimelineOverviewWidget { background-color: white; color: black; } "
+                  "QLabel { color: black; } "
+                  "QCheckBox { color: black; }");
 
     auto* topLayout = new QHBoxLayout;
     topLayout->setContentsMargins(16, 8, 16, 0);
@@ -90,11 +94,14 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
 
     int yOffset = 30; // Below checkbox row
 
+    // Fill background
+    painter.fillRect(rect(), Qt::white);
+
     const auto& hist = m_analyzer->histogram();
     uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
 
     // Draw time axis
-    painter.setPen(palette().text().color());
+    painter.setPen(Qt::black);
     int numLabels = 6;
     for (int i = 0; i <= numLabels; ++i) {
         int x = labelWidth + (w * i) / numLabels;
@@ -107,7 +114,7 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
     yOffset += 15;
 
     auto drawLane = [&](size_t groupIdx, const QString& name, float hue) {
-        painter.setPen(palette().text().color());
+        painter.setPen(Qt::black);
         painter.drawText(QRect(0, yOffset, labelWidth - 5, laneHeight), Qt::AlignRight | Qt::AlignVCenter, name);
 
         uint32_t maxCount = 0;
@@ -123,19 +130,18 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
             }
         }
 
-        if (maxCount > 0) {
-            for (int x = 0; x < std::min<int>(w, hist.bins[groupIdx].size() * 5); ++x) {
+        // Draw bins (including 0 count)
+        for (int x = 0; x < w; ++x) {
+            uint32_t count = 0;
+            if (hist.bins[groupIdx].size() > 0) {
                 size_t binIndex = x / 5;
                 if (binIndex < hist.bins[groupIdx].size()) {
-                    uint32_t count = hist.bins[groupIdx][binIndex];
-                    if (count > 0) {
-                        float intensity = static_cast<float>(count) / maxCount;
-                        float lightness = 0.95f - intensity * 0.7f;
-                        painter.fillRect(
-                            labelWidth + x, yOffset, 1, laneHeight, QColor::fromHslF(hue, 0.7f, lightness));
-                    }
+                    count = hist.bins[groupIdx][binIndex];
                 }
             }
+            float intensity = maxCount > 0 ? static_cast<float>(count) / maxCount : 0.0f;
+            float lightness = 0.95f - intensity * 0.7f;
+            painter.fillRect(labelWidth + x, yOffset, 1, laneHeight, QColor::fromHslF(hue, 0.7f, lightness));
         }
         yOffset += laneHeight + 1;
     };
