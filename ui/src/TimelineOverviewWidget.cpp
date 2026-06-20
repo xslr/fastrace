@@ -97,6 +97,16 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
     // Fill background
     painter.fillRect(rect(), Qt::white);
 
+    // Draw async histogram build progress
+    if (m_histogramWatcher.isRunning()) {
+        size_t totalChunks = m_analyzer->getChunkIndex().size();
+        if (totalChunks > 0) {
+            size_t processed = m_analyzer->histogramChunksProcessed.load(std::memory_order_relaxed);
+            float progress = static_cast<float>(processed) / totalChunks;
+            painter.fillRect(labelWidth, yOffset - 2, static_cast<int>(w * progress), 2, Qt::blue);
+        }
+    }
+
     const auto& hist = m_analyzer->histogram();
     uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
 

@@ -1351,6 +1351,8 @@ size_t Analyzer::buildIndex(const std::string& filename)
 
 void Analyzer::buildHistogram(int numBins)
 {
+    histogramChunksProcessed.store(0, std::memory_order_relaxed);
+
     if (numBins <= 0 || chunkIndex_.empty() || histogram_.traceEndUs <= histogram_.traceStartUs) {
         return;
     }
@@ -1383,6 +1385,7 @@ void Analyzer::buildHistogram(int numBins)
                 }
             }
         }
+        histogramChunksProcessed.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

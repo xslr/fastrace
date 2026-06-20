@@ -53,6 +53,8 @@ public:
     std::atomic<bool> cancelled { false };
     /// Set to true by the UI thread to request early termination of buildHistogram.
     std::atomic<bool> histogramCancelled { false };
+    /// Number of chunks processed so far in buildHistogram.
+    std::atomic<size_t> histogramChunksProcessed { 0 };
     /// Bytes consumed by the producer so far (updated each container push).
     std::atomic<size_t> bytesRead { 0 };
     /// Total file size in bytes; set once at the start of processFile.
