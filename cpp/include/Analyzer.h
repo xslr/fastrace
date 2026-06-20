@@ -56,6 +56,9 @@ public:
     static constexpr size_t CHUNK_SIZE = 10'000;
 
     size_t buildIndex(const std::string& filename);
+
+    // Get the chunk index
+    const std::vector<ChunkEntry>& getChunkIndex() const { return chunkIndex_; }
     std::vector<TraceMessage> decodeChunk(size_t chunkIndex) const;
     size_t totalMessages() const noexcept { return totalMessages_; }
 

@@ -140,10 +140,8 @@ int main(int argc, char* argv[])
     auto procStartTs = std::chrono::high_resolution_clock::now();
     analyzer.processFile(filename);
     auto procEndTs = std::chrono::high_resolution_clock::now();
-    const double proc_s = std::chrono::duration<double>(procEndTs - procStartTs).count();
 
-    size_t indexMsgs = analyzer.buildIndex(filename);
-    spdlog::info("buildIndex detected: {} messages", indexMsgs);
+    const double proc_s = std::chrono::duration<double>(procEndTs - procStartTs).count();
 
     // --- raw read benchmark (cold cache) ---
     if (runBenchmark) {
