@@ -9,6 +9,7 @@
 #include <QResizeEvent>
 #include <QToolTip>
 #include <QtConcurrent>
+#include <spdlog/spdlog.h>
 
 #include "Analyzer.h"
 
@@ -134,6 +135,9 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
                 if (binIndex < hist.bins[groupIdx].size()) {
                     uint32_t count = hist.bins[groupIdx][binIndex];
                     if (count > maxCount) {
+                        // if (groupIdx == 1) {
+                        //     spdlog::info("group:{} update maxCount={} -> {}", groupIdx, maxCount, count);
+                        // }
                         maxCount = count;
                     }
                 }
@@ -149,8 +153,11 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
                     count = hist.bins[groupIdx][binIndex];
                 }
             }
-            float intensity = maxCount > 0 ? static_cast<float>(count) / maxCount : 0.0f;
-            float lightness = 0.95f - intensity * 0.7f;
+            const float intensity = maxCount > 0 ? static_cast<float>(count) / maxCount : 0.0f;
+            const float lightness = 0.95f - intensity * 0.7f;
+            // if (groupIdx == 1) {
+            //     spdlog::info("group:{} count:{} intensity:{} lightness:{}", groupIdx, count, intensity, lightness);
+            // }
             painter.fillRect(labelWidth + x, yOffset, 1, laneHeight, QColor::fromHslF(hue, 0.7f, lightness));
         }
         yOffset += laneHeight + 1;
@@ -162,6 +169,9 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
     if (m_chkEthernet->isChecked()) {
         drawLane(static_cast<size_t>(fastrace::ProtocolGroup::Ethernet), "ETH", 0.45f); // Teal
     }
+
+    // FIXME: the visible window overlay does not work currently. This shall be tackled after implementing signal
+    // rendering
 
     // Draw visible window overlay
     if (m_visibleEndUs > m_visibleStartUs && durationUs > 0) {
@@ -212,6 +222,11 @@ void TimelineOverviewWidget::mouseMoveEvent(QMouseEvent* event)
     if (!m_analyzer) {
         return;
     }
+
+    // FIXME: the vertical offset is wrong. this considers that the lanes start from y=0.
+    // it does not consider that lanes start after tooltips.
+    // This results in tooltips for lane 1 overlapping with lane 0 and tooltips for lane 0 rendering on timestamp
+    // labels.
 
     int labelWidth = 50;
     int w = width() - labelWidth;
