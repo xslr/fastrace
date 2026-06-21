@@ -1332,12 +1332,38 @@ size_t Analyzer::buildIndex(const std::string& filename)
     totalMessages_ = cumulativeMessages;
 
     // --- Histogram bounds initialization ---
+    histogram_.traceStartUs = 0;
+    histogram_.traceEndUs = 0;
+
     if (!chunkIndex_.empty()) {
-        auto firstChunk = decodeChunk(0);
-        auto lastChunk = decodeChunk(chunkIndex_.size() - 1);
-        if (!firstChunk.empty() && !lastChunk.empty()) {
-            histogram_.traceStartUs = firstChunk.front().timestampUs;
-            histogram_.traceEndUs = lastChunk.back().timestampUs;
+        bool foundStart = false;
+        for (size_t i = 0; i < chunkIndex_.size(); ++i) {
+            auto chunk = decodeChunk(i);
+            for (const auto& msg : chunk) {
+                if (protocolGroupOf(msg.objectType) != ProtocolGroup::COUNT) {
+                    histogram_.traceStartUs = msg.timestampUs;
+                    foundStart = true;
+                    break;
+                }
+            }
+            if (foundStart) {
+                break;
+            }
+        }
+
+        bool foundEnd = false;
+        for (size_t i = chunkIndex_.size(); i > 0; --i) {
+            auto chunk = decodeChunk(i - 1);
+            for (auto it = chunk.rbegin(); it != chunk.rend(); ++it) {
+                if (protocolGroupOf(it->objectType) != ProtocolGroup::COUNT) {
+                    histogram_.traceEndUs = it->timestampUs;
+                    foundEnd = true;
+                    break;
+                }
+            }
+            if (foundEnd) {
+                break;
+            }
         }
     }
 
