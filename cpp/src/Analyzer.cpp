@@ -1241,6 +1241,106 @@ static void runIndexConsumer(
     }
 }
 
+static void stitchFragments(Analyzer* analyzer, std::vector<ContainerCount>& containerCounts)
+{
+    for (size_t i = 0; i + 1 < containerCounts.size(); ++i) {
+        auto& tail = containerCounts[i].tailFrag;
+        auto& head = containerCounts[i + 1].headFrag;
+        if (!tail.empty() && !head.empty()) {
+            std::vector<char> stitched;
+            stitched.reserve(tail.size() + head.size());
+            stitched.insert(stitched.end(), tail.begin(), tail.end());
+            stitched.insert(stitched.end(), head.begin(), head.end());
+
+            std::unordered_map<uint32_t, uint64_t> sCounts;
+            uint64_t sSplits = 0;
+            processInnerObjects(analyzer, stitched.data(), stitched.size(), sCounts, sSplits, nullptr, nullptr);
+
+            uint32_t sCount = 0;
+            for (const auto& [type, cnt] : sCounts) {
+                if (type != LOG_CONTAINER) {
+                    sCount += cnt;
+                }
+            }
+            // Add the stitched count to the container that originated the object (the tail)
+            containerCounts[i].countInContainer += sCount;
+        }
+        // Free memory early
+        tail.clear();
+        head.clear();
+    }
+}
+
+static size_t computeChunkIndexes(
+    std::vector<ChunkEntry>& chunkIndex, const std::vector<ContainerCount>& containerCounts)
+{
+    chunkIndex.clear();
+    size_t cumulativeMessages = 0;
+    size_t nextChunkBoundary = 0;
+
+    for (const auto& cc : containerCounts) {
+        if (cumulativeMessages + cc.countInContainer > nextChunkBoundary) {
+            uint32_t skipMessages = nextChunkBoundary - cumulativeMessages;
+            chunkIndex.push_back({ cc.fileOffset, cc.containerIndex, skipMessages });
+            nextChunkBoundary += Analyzer::CHUNK_SIZE;
+
+            // It's possible one container has >10k messages, so loop to add all
+            // boundaries in it
+            while (cumulativeMessages + cc.countInContainer > nextChunkBoundary) {
+                skipMessages = nextChunkBoundary - cumulativeMessages;
+                chunkIndex.push_back({ cc.fileOffset, cc.containerIndex, skipMessages });
+                nextChunkBoundary += Analyzer::CHUNK_SIZE;
+            }
+        }
+        cumulativeMessages += cc.countInContainer;
+    }
+    return cumulativeMessages;
+}
+
+struct HistogramBounds {
+    uint64_t startUs = 0;
+    uint64_t endUs = 0;
+};
+
+static HistogramBounds computeHistogramBounds(const Analyzer* analyzer)
+{
+    HistogramBounds bounds;
+    const auto& chunkIndex = analyzer->getChunkIndex();
+
+    if (!chunkIndex.empty()) {
+        bool foundStart = false;
+        for (size_t i = 0; i < chunkIndex.size(); ++i) {
+            auto chunk = analyzer->decodeChunk(i);
+            for (const auto& msg : chunk) {
+                if (protocolGroupOf(msg.objectType) != ProtocolGroup::COUNT) {
+                    bounds.startUs = msg.timestampUs;
+                    foundStart = true;
+                    break;
+                }
+            }
+            if (foundStart) {
+                break;
+            }
+        }
+
+        bool foundEnd = false;
+        for (size_t i = chunkIndex.size(); i > 0; --i) {
+            auto chunk = analyzer->decodeChunk(i - 1);
+            for (auto it = chunk.rbegin(); it != chunk.rend(); ++it) {
+                if (protocolGroupOf(it->objectType) != ProtocolGroup::COUNT) {
+                    bounds.endUs = it->timestampUs;
+                    foundEnd = true;
+                    break;
+                }
+            }
+            if (foundEnd) {
+                break;
+            }
+        }
+    }
+    return bounds;
+}
+
 size_t Analyzer::buildIndex(const std::string& filename)
 {
     using Clock = std::chrono::steady_clock;
@@ -1280,92 +1380,12 @@ size_t Analyzer::buildIndex(const std::string& filename)
     std::sort(containerCounts.begin(), containerCounts.end(),
         [](const ContainerCount& a, const ContainerCount& b) { return a.containerIndex < b.containerIndex; });
 
-    // Stitch
-    for (size_t i = 0; i + 1 < containerCounts.size(); ++i) {
-        auto& tail = containerCounts[i].tailFrag;
-        auto& head = containerCounts[i + 1].headFrag;
-        if (!tail.empty() && !head.empty()) {
-            std::vector<char> stitched;
-            stitched.reserve(tail.size() + head.size());
-            stitched.insert(stitched.end(), tail.begin(), tail.end());
-            stitched.insert(stitched.end(), head.begin(), head.end());
+    stitchFragments(this, containerCounts);
+    totalMessages_ = computeChunkIndexes(chunkIndex_, containerCounts);
 
-            std::unordered_map<uint32_t, uint64_t> sCounts;
-            uint64_t sSplits = 0;
-            processInnerObjects(this, stitched.data(), stitched.size(), sCounts, sSplits, nullptr, nullptr);
-
-            uint32_t sCount = 0;
-            for (const auto& [type, cnt] : sCounts) {
-                if (type != LOG_CONTAINER) {
-                    sCount += cnt;
-                }
-            }
-            // Add the stitched count to the container that originated the object (the tail)
-            containerCounts[i].countInContainer += sCount;
-        }
-        // Free memory early
-        tail.clear();
-        head.clear();
-    }
-
-    chunkIndex_.clear();
-    size_t cumulativeMessages = 0;
-    size_t nextChunkBoundary = 0;
-
-    for (const auto& cc : containerCounts) {
-        if (cumulativeMessages + cc.countInContainer > nextChunkBoundary) {
-            uint32_t skipMessages = nextChunkBoundary - cumulativeMessages;
-            chunkIndex_.push_back({ cc.fileOffset, cc.containerIndex, skipMessages });
-            nextChunkBoundary += CHUNK_SIZE;
-
-            // It's possible one container has >10k messages, so loop to add all
-            // boundaries in it
-            while (cumulativeMessages + cc.countInContainer > nextChunkBoundary) {
-                skipMessages = nextChunkBoundary - cumulativeMessages;
-                chunkIndex_.push_back({ cc.fileOffset, cc.containerIndex, skipMessages });
-                nextChunkBoundary += CHUNK_SIZE;
-            }
-        }
-        cumulativeMessages += cc.countInContainer;
-    }
-
-    totalMessages_ = cumulativeMessages;
-
-    // --- Histogram bounds initialization ---
-    histogram_.traceStartUs = 0;
-    histogram_.traceEndUs = 0;
-
-    if (!chunkIndex_.empty()) {
-        bool foundStart = false;
-        for (size_t i = 0; i < chunkIndex_.size(); ++i) {
-            auto chunk = decodeChunk(i);
-            for (const auto& msg : chunk) {
-                if (protocolGroupOf(msg.objectType) != ProtocolGroup::COUNT) {
-                    histogram_.traceStartUs = msg.timestampUs;
-                    foundStart = true;
-                    break;
-                }
-            }
-            if (foundStart) {
-                break;
-            }
-        }
-
-        bool foundEnd = false;
-        for (size_t i = chunkIndex_.size(); i > 0; --i) {
-            auto chunk = decodeChunk(i - 1);
-            for (auto it = chunk.rbegin(); it != chunk.rend(); ++it) {
-                if (protocolGroupOf(it->objectType) != ProtocolGroup::COUNT) {
-                    histogram_.traceEndUs = it->timestampUs;
-                    foundEnd = true;
-                    break;
-                }
-            }
-            if (foundEnd) {
-                break;
-            }
-        }
-    }
+    auto bounds = computeHistogramBounds(this);
+    histogram_.traceStartUs = bounds.startUs;
+    histogram_.traceEndUs = bounds.endUs;
 
     auto t1 = Clock::now();
     spdlog::info("buildIndex done: scanned {} containers, {} messages, {} index chunks in {:.2f} ms",
