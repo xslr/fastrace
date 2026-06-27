@@ -62,7 +62,7 @@ add_library(fastrace_analyzer STATIC
   src/MappedFile.cpp
   src/WorkQueue.cpp
   src/RecentFiles.cpp
-  src/SignalDatabases.cpp
+  src/SignalDecoder.cpp
   src/ArxmlParser.cpp
 )
 target_include_directories(fastrace_analyzer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

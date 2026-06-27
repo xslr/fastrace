@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QProgressBar>
 #include <QPropertyAnimation>
+#include <QSettings>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QTimer>
@@ -122,9 +123,24 @@ MainWindow::MainWindow(QWidget* parent)
         m_fadeAnim = nullptr; // will self-delete
     });
 
+    // ── DB loading: future watcher + poll timer ───────────────────────────────
+    m_dbWatcher = new QFutureWatcher<void>(this);
+    connect(m_dbWatcher, &QFutureWatcher<void>::finished, this, &MainWindow::onDbLoadFinished);
+
+    m_dbPollTimer = new QTimer(this);
+    m_dbPollTimer->setInterval(100);
+    connect(m_dbPollTimer, &QTimer::timeout, this, &MainWindow::onPollDbProgress);
+
+    // ── Create bare analyzer so timeline/DB widgets work before trace is loaded
+    m_analyzer = std::make_shared<fastrace::Analyzer>();
+    m_timeline->attachAnalyzer(m_analyzer);
+
     // ── Signal connections ────────────────────────────────────────────────────
     connect(m_topBar, &TopBarWidget::modeChanged, this, &MainWindow::onModeChanged);
     connect(m_topBar, &TopBarWidget::traceFileChanged, this, &MainWindow::onTraceFileChanged);
+    connect(m_topBar, &TopBarWidget::databaseSelectionChanged, this, &MainWindow::onDatabaseSelectionChanged);
+    connect(m_timeline, &TimelineWidget::signalsChanged, this,
+        [](const QStringList& names) { QSettings().setValue("timeline/selectedSignals", names); });
 
     connect(m_timelineOverview, &TimelineOverviewWidget::navigateRequested, this, [](uint64_t timestampUs) {
         // spdlog::info("TimelineOverviewWidget requested navigation to {} us", timestampUs);
@@ -184,6 +200,14 @@ void MainWindow::resetSpeedState()
 // ────────────────────────────────────────────────────
 void MainWindow::startLoad(const QString& path)
 {
+    // Cancel any in-flight DB load on the current analyzer before replacing it.
+    if (m_dbWatcher->isRunning() && m_analyzer) {
+        m_analyzer->dbLoadCancelled.store(true, std::memory_order_relaxed);
+        m_dbWatcher->waitForFinished();
+        m_dbPollTimer->stop();
+        m_topBar->setDatabaseComboEnabled(true);
+    }
+
     // Restore label opacity in case a fade was in progress.
     auto* effect = qobject_cast<QGraphicsOpacityEffect*>(m_statusLabel->graphicsEffect());
     if (effect) {
@@ -199,6 +223,9 @@ void MainWindow::startLoad(const QString& path)
     auto analyzer = std::make_shared<fastrace::Analyzer>();
     analyzer->collectMessages = false; // We use lazy loading now
     m_analyzer = analyzer; // store as current
+
+    // Attach immediately so btnAddSignal works during trace load.
+    m_timeline->attachAnalyzer(m_analyzer);
 
     showLoadingState(QFileInfo(path).fileName());
 
@@ -254,7 +281,7 @@ void MainWindow::onPollProgress()
     m_statusLabel->setText(m_loadingBaseLabel + speedStr);
 }
 
-// ── Load finished
+// ── Trace load finished
 // ─────────────────────────────────────────────────────────────
 void MainWindow::onLoadFinished()
 {
@@ -288,6 +315,13 @@ void MainWindow::onLoadFinished()
     m_overviewView->messageList()->attachAnalyzer(m_analyzer);
     m_notebookView->messageList()->attachAnalyzer(m_analyzer);
     m_timelineOverview->attachAnalyzer(m_analyzer);
+    m_timeline->attachAnalyzer(m_analyzer);
+    m_messageDetails->attachAnalyzer(m_analyzer);
+
+    // Reload the signal database into the new analyzer (if one was selected).
+    if (!m_currentDbPath.isEmpty()) {
+        onDatabaseSelectionChanged(m_currentDbPath);
+    }
 
     updateTimeBoundsLabel();
 
@@ -329,6 +363,53 @@ void MainWindow::onTimeBoundsContextMenu(const QPoint& /*pos*/)
 {
     m_absoluteTimestamps = !m_absoluteTimestamps;
     updateTimeBoundsLabel();
+}
+
+void MainWindow::onDatabaseSelectionChanged(const QString& path)
+{
+    m_currentDbPath = path;
+
+    if (path.isEmpty()) {
+        m_analyzer->clearDatabase();
+        m_messageDetails->refreshSignalDecode();
+        return;
+    }
+
+    if (m_dbWatcher->isRunning()) {
+        m_analyzer->dbLoadCancelled.store(true, std::memory_order_relaxed);
+        m_dbWatcher->waitForFinished();
+    }
+    m_analyzer->dbLoadCancelled.store(false, std::memory_order_relaxed);
+
+    m_topBar->setDatabaseComboEnabled(false);
+    m_topBar->setDbLoadProgress(0.0f);
+    m_dbPollTimer->start();
+
+    const std::string stdPath = path.toStdString();
+    auto future = QtConcurrent::run([analyzer = m_analyzer, stdPath]() { analyzer->loadDatabase(stdPath); });
+    m_dbWatcher->setFuture(future);
+}
+
+void MainWindow::onDbLoadFinished()
+{
+    m_dbPollTimer->stop();
+    m_topBar->setDbLoadProgress(1.0f);
+    m_topBar->setDatabaseComboEnabled(true);
+    m_messageDetails->refreshSignalDecode();
+
+    const QStringList saved = QSettings().value("timeline/selectedSignals").toStringList();
+    if (!saved.isEmpty()) {
+        m_timeline->restoreSignals(saved);
+    }
+}
+
+void MainWindow::onPollDbProgress()
+{
+    if (!m_analyzer) {
+        return;
+    }
+    float progress = m_analyzer->dbLoadProgress.load(std::memory_order_relaxed);
+    m_topBar->setDbLoadProgress(progress);
 }
 
 void MainWindow::updateTimeBoundsLabel()

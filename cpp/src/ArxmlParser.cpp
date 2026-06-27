@@ -134,6 +134,19 @@ namespace {
                     info.mappings.push_back(std::move(sm));
                 }
                 maps.iPdus[elPath] = std::move(info);
+            } else if (std::strcmp(tag, "NM-PDU") == 0) {
+                IPduInfo info;
+                info.byteLength = parseU32(cv(el, "LENGTH"));
+                for (auto m : el.child("I-SIGNAL-TO-PDU-MAPPINGS").children("I-SIGNAL-TO-I-PDU-MAPPING")) {
+                    SignalMapping sm;
+                    sm.name = cv(m, "SHORT-NAME");
+                    sm.iSignalRef = m.child("I-SIGNAL-REF").text().get();
+                    sm.startBit = parseU32(cv(m, "START-POSITION"));
+                    const char* bo = cv(m, "PACKING-BYTE-ORDER");
+                    sm.isBigEndian = bo && std::strcmp(bo, "MOST-SIGNIFICANT-BYTE-FIRST") == 0;
+                    info.mappings.push_back(std::move(sm));
+                }
+                maps.iPdus[elPath] = std::move(info);
             } else if (std::strcmp(tag, "CAN-FRAME") == 0) {
                 CanFrameInfo info;
                 info.dlc = parseU32(cv(el, "FRAME-LENGTH"));
@@ -206,7 +219,8 @@ namespace {
 
             for (const auto& sm : pduIt->second.mappings) {
                 ArSignal sig;
-                sig.name = sm.name;
+                auto pos = sm.iSignalRef.rfind('/');
+                sig.name = (pos != std::string::npos) ? sm.iSignalRef.substr(pos + 1) : sm.iSignalRef;
                 sig.startBit = sm.startBit;
                 sig.isBigEndian = sm.isBigEndian;
                 auto sigIt = maps.iSignals.find(sm.iSignalRef);
@@ -235,7 +249,8 @@ namespace {
 
             for (const auto& sm : pduIt->second.mappings) {
                 ArSignal sig;
-                sig.name = sm.name;
+                auto pos = sm.iSignalRef.rfind('/');
+                sig.name = (pos != std::string::npos) ? sm.iSignalRef.substr(pos + 1) : sm.iSignalRef;
                 sig.startBit = sm.startBit;
                 sig.isBigEndian = sm.isBigEndian;
                 auto sigIt = maps.iSignals.find(sm.iSignalRef);

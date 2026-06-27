@@ -57,17 +57,45 @@
     </widget>
    </item>
 
-
-   <!-- DB selector combobox -->
+   <!-- DB selector combobox + progress bar -->
    <item>
-    <widget class="DatabaseComboBox" name="cmbDatabase">
-     <property name="minimumSize">
-      <size>
-       <width>200</width>
-       <height>0</height>
-      </size>
+    <layout class="QVBoxLayout" name="databaseVLayout">
+     <property name="spacing">
+      <number>0</number>
      </property>
-    </widget>
+     <item>
+      <widget class="QComboBox" name="cmbDatabase">
+       <property name="minimumSize">
+        <size>
+         <width>200</width>
+         <height>0</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QProgressBar" name="dbLoadProgress">
+       <property name="visible">
+        <bool>false</bool>
+       </property>
+       <property name="maximum">
+        <number>100</number>
+       </property>
+       <property name="value">
+        <number>0</number>
+       </property>
+       <property name="textVisible">
+        <bool>false</bool>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>16777215</width>
+         <height>3</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+    </layout>
    </item>
 
    <item>
@@ -151,11 +179,4 @@
  </widget>
  <resources/>
  <connections/>
- <customwidgets>
-  <customwidget>
-   <class>DatabaseComboBox</class>
-   <extends>QComboBox</extends>
-   <header>DatabaseComboBox.h</header>
-  </customwidget>
- </customwidgets>
 </ui>

@@ -39,6 +39,9 @@ private slots:
     void onLoadFinished();
     void onPollProgress();
     void onTimeBoundsContextMenu(const QPoint& pos);
+    void onDatabaseSelectionChanged(const QString& path);
+    void onDbLoadFinished();
+    void onPollDbProgress();
 
 private:
     void startLoad(const QString& path);
@@ -77,6 +80,11 @@ private:
     std::shared_ptr<fastrace::Analyzer> m_analyzer;
     QFutureWatcher<void>* m_watcher = nullptr;
     QTimer* m_pollTimer = nullptr;
+
+    // ── Database async loading ─────────────────────────────────────────────────
+    QFutureWatcher<void>* m_dbWatcher = nullptr;
+    QTimer* m_dbPollTimer = nullptr;
+    QString m_currentDbPath;
 
     // ── Msg/s rolling average (N=5 samples at 100 ms each) ───────────────────
     static constexpr int kSpeedSamples = 5;

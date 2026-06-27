@@ -24,9 +24,7 @@ add_executable(fastrace_ui
     include/TopBarWidget.h
     src/TopBarWidget.ui
 
-    # ── Custom DB combobox ────────────────────────────────────────────────────
-    src/DatabaseComboBox.cpp
-    include/DatabaseComboBox.h
+
 
     # ── Shared left panel ─────────────────────────────────────────────────────
     # (LeftPanelWidget removed from build)
@@ -82,5 +80,5 @@ qt_add_ui( fastrace_ui SOURCES
 target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent fastrace_analyzer)
 
 # ui/src/ must be on the include path so that the AUTOUIC-generated
-# ui_TopBarWidget.h can find promoted-widget headers (e.g. DatabaseComboBox.h).
+# headers can find their necessary files.
 target_include_directories(fastrace_ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

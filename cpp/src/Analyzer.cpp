@@ -1,4 +1,6 @@
 #include "Analyzer.h"
+#include "ArxmlParser.h"
+#include "SignalDecoder.h"
 
 #include <chrono>
 #ifdef _WIN32
@@ -1568,6 +1570,96 @@ std::vector<TraceMessage> Analyzer::decodeChunk(size_t chunkIndex) const
     }
 
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// loadDatabase / clearDatabase / buildSignalTimeSeries
+// ---------------------------------------------------------------------------
+
+void Analyzer::loadDatabase(const std::string& path)
+{
+    dbLoadProgress.store(0.0f, std::memory_order_relaxed);
+    m_arDatabase_ = ArxmlParser::parseFiles({ path });
+    m_arDatabase_.buildIndex();
+    dbLoadProgress.store(1.0f, std::memory_order_relaxed);
+}
+
+void Analyzer::clearDatabase() { m_arDatabase_ = ArDatabase {}; }
+
+void Analyzer::buildSignalTimeSeries(const std::string& iSignalName, int numBins, std::vector<SignalBin>& out)
+{
+    if (numBins <= 0 || chunkIndex_.empty()) {
+        return;
+    }
+
+    // Locate signal in arDatabase
+    uint32_t arbId = 0;
+    ArSignal sigDef;
+    bool found = false;
+    for (const auto& msg : m_arDatabase_.messages) {
+        for (const auto& sig : msg.signalDefs) {
+            if (sig.name == iSignalName) {
+                arbId = msg.canId;
+                sigDef = sig;
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+
+    if (!found) {
+        return;
+    }
+
+    const uint64_t traceStart = histogram_.traceStartUs;
+    const uint64_t traceEnd = histogram_.traceEndUs;
+    if (traceEnd <= traceStart) {
+        return;
+    }
+
+    const uint64_t duration = traceEnd - traceStart;
+    const uint64_t binWidth = duration / static_cast<uint64_t>(numBins);
+    if (binWidth == 0) {
+        return;
+    }
+
+    out.resize(numBins);
+    for (int i = 0; i < numBins; ++i) {
+        out[i] = SignalBin {};
+        out[i].timestampUs = traceStart + static_cast<uint64_t>(i) * binWidth + binWidth / 2;
+    }
+
+    histogramChunksProcessed.store(0, std::memory_order_relaxed);
+
+    for (size_t ci = 0; ci < chunkIndex_.size(); ++ci) {
+        if (histogramCancelled.load(std::memory_order_relaxed)) {
+            break;
+        }
+        auto msgs = decodeChunk(ci);
+        for (const auto& msg : msgs) {
+            if (msg.arbId == arbId) {
+                uint64_t raw
+                    = extractSignalRaw(msg.data, msg.dataLen, sigDef.startBit, sigDef.bitLength, sigDef.isBigEndian);
+                uint64_t clampedTs = std::max(msg.timestampUs, traceStart);
+                size_t binIdx = (clampedTs - traceStart) / binWidth;
+                if (binIdx < static_cast<size_t>(numBins)) {
+                    auto& bin = out[binIdx];
+                    if (!bin.hasData) {
+                        bin.minRaw = raw;
+                        bin.maxRaw = raw;
+                        bin.hasData = true;
+                    } else {
+                        bin.minRaw = std::min(bin.minRaw, raw);
+                        bin.maxRaw = std::max(bin.maxRaw, raw);
+                    }
+                }
+            }
+        }
+        histogramChunksProcessed.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------

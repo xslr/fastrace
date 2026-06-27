@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ArxmlTypes.h"
 #include "MappedFile.h"
 #include "TraceMessage.h"
 
@@ -41,6 +42,13 @@ struct PerfCounters {
 
 std::string_view objectTypeName(uint32_t t);
 
+struct SignalBin {
+    uint64_t timestampUs = 0;
+    uint64_t minRaw = UINT64_MAX;
+    uint64_t maxRaw = 0;
+    bool hasData = false;
+};
+
 class Analyzer {
 public:
     bool skipDecompress = false;
@@ -63,6 +71,10 @@ public:
     /// push_back.
     std::atomic<size_t> messagesCollected { 0 };
 
+    // ── Database async-load progress ─────────────────────────────────────────
+    std::atomic<float> dbLoadProgress { 0.0f };
+    std::atomic<bool> dbLoadCancelled { false };
+
     PerfCounters perf;
     std::vector<TraceMessage> messages;
     std::mutex messagesMu;
@@ -80,11 +92,18 @@ public:
 
     void processFile(const std::string& filename);
 
+    void loadDatabase(const std::string& path);
+    void clearDatabase();
+    const ArDatabase& arDatabase() const { return m_arDatabase_; }
+
+    void buildSignalTimeSeries(const std::string& iSignalName, int numBins, std::vector<SignalBin>& out);
+
 private:
     std::vector<ChunkEntry> chunkIndex_;
     HistogramData histogram_;
     size_t totalMessages_ = 0;
     MappedFile mf_;
+    ArDatabase m_arDatabase_;
 };
 
 } // namespace fastrace

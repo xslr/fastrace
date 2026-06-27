@@ -19,13 +19,16 @@ public:
 
     ViewMode currentMode() const { return m_mode; }
 
+    void setDatabaseComboEnabled(bool enabled);
+    void setDbLoadProgress(float fraction);
+
 signals:
     void playToggled(bool playing);
     void speedChanged(const QString& speed);
     void traceFileChanged(const QString& path);
     /** Emitted whenever the user clicks Overview or Notebook. */
     void modeChanged(TopBarWidget::ViewMode mode);
-    void databaseSelectionChanged(const QStringList& paths);
+    void databaseSelectionChanged(const QString& path);
 
 private slots:
     void onComboActivated(int index);
@@ -37,13 +40,11 @@ private:
     void populateTraceCombo();
     void populateDbCombo();
     void openTrace(const QString& path);
-    void emitDbSelectionChanged();
-    void updateDbComboDisplay(); ///< syncs DatabaseComboBox active-count display
+    void openDatabase(const QString& path);
     void updateModeButtons();
 
     Ui::TopBarWidget* ui;
     fastrace::RecentFiles m_recentFiles;
     fastrace::RecentFiles m_recentDbs;
-    QSet<QString> m_activeDbPaths;
     ViewMode m_mode = ViewMode::Overview;
 };
