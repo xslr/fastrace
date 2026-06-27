@@ -1698,4 +1698,27 @@ void Analyzer::processFile(const std::string& filename)
     }
 }
 
+void Analyzer::reset()
+{
+    chunkIndex_.clear();
+    histogram_ = HistogramData {};
+    totalMessages_ = 0;
+
+    {
+        std::lock_guard<std::mutex> lk(messagesMu);
+        messages.clear();
+    }
+
+    perf = PerfCounters {};
+
+    cancelled.store(false, std::memory_order_relaxed);
+    histogramCancelled.store(false, std::memory_order_relaxed);
+    histogramChunksProcessed.store(0, std::memory_order_relaxed);
+    bytesRead.store(0, std::memory_order_relaxed);
+    totalBytes.store(0, std::memory_order_relaxed);
+    messagesCollected.store(0, std::memory_order_relaxed);
+    dbLoadProgress.store(0.0f, std::memory_order_relaxed);
+    dbLoadCancelled.store(false, std::memory_order_relaxed);
+}
+
 } // namespace fastrace

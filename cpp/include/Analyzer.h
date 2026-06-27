@@ -94,6 +94,7 @@ public:
 
     void loadDatabase(const std::string& path);
     void clearDatabase();
+    void reset();
     const ArDatabase& arDatabase() const { return m_arDatabase_; }
 
     void buildSignalTimeSeries(const std::string& iSignalName, int numBins, std::vector<SignalBin>& out);

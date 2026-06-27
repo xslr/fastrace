@@ -20,6 +20,7 @@ public:
     ViewMode currentMode() const { return m_mode; }
 
     void setDatabaseComboEnabled(bool enabled);
+    void setTraceComboEnabled(bool enabled);
     void setDbLoadProgress(float fraction);
 
 signals:

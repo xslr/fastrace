@@ -171,7 +171,7 @@ void MainWindow::onTraceFileChanged(const QString& path)
     startLoad(path);
 }
 
-// ── Cancel any in-flight load
+// ── Cancel any ongoing load
 // ─────────────────────────────────────────────────
 void MainWindow::cancelCurrentLoad()
 {
@@ -200,7 +200,7 @@ void MainWindow::resetSpeedState()
 // ────────────────────────────────────────────────────
 void MainWindow::startLoad(const QString& path)
 {
-    // Cancel any in-flight DB load on the current analyzer before replacing it.
+    // Cancel any ongoing DB load on the current analyzer before replacing it.
     if (m_dbWatcher->isRunning() && m_analyzer) {
         m_analyzer->dbLoadCancelled.store(true, std::memory_order_relaxed);
         m_dbWatcher->waitForFinished();
@@ -220,17 +220,15 @@ void MainWindow::startLoad(const QString& path)
 
     resetSpeedState();
 
-    auto analyzer = std::make_shared<fastrace::Analyzer>();
-    analyzer->collectMessages = false; // We use lazy loading now
-    m_analyzer = analyzer; // store as current
+    m_topBar->setTraceComboEnabled(false);
 
-    // Attach immediately so btnAddSignal works during trace load.
-    m_timeline->attachAnalyzer(m_analyzer);
+    m_analyzer->reset();
+    m_analyzer->collectMessages = false; // We use lazy loading now
 
     showLoadingState(QFileInfo(path).fileName());
 
     // Launch the index builder on a thread pool thread.
-    auto future = QtConcurrent::run([analyzer, path]() { analyzer->buildIndex(path.toStdString()); });
+    auto future = QtConcurrent::run([analyzer = m_analyzer, path]() { analyzer->buildIndex(path.toStdString()); });
 
     m_watcher->setFuture(future);
     m_pollTimer->start();
@@ -286,6 +284,7 @@ void MainWindow::onPollProgress()
 void MainWindow::onLoadFinished()
 {
     m_pollTimer->stop();
+    m_topBar->setTraceComboEnabled(true);
 
     // If this was a cancelled load, discard the partial results.
     if (!m_analyzer || m_analyzer->cancelled.load(std::memory_order_relaxed)) {

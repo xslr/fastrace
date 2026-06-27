@@ -196,6 +196,7 @@ void TopBarWidget::onNotebookClicked()
 }
 
 void TopBarWidget::setDatabaseComboEnabled(bool enabled) { ui->cmbDatabase->setEnabled(enabled); }
+void TopBarWidget::setTraceComboEnabled(bool enabled) { ui->cmbTraceFile->setEnabled(enabled); }
 
 void TopBarWidget::setDbLoadProgress(float fraction)
 {
