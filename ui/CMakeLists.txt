@@ -67,14 +67,25 @@ add_executable(fastrace_ui
     include/NotebookView.h
 )
 
-qt_add_ui( fastrace_ui SOURCES
-    src/TopBarWidget.ui
-    src/TimelineWidget.ui
-    src/MessageListWidget.ui
-    src/MessageDetailsWidget.ui
-    src/DetectionsWidget.ui
-    src/ScriptEditorWidget.ui
-)
+if(COMMAND qt_add_ui)
+    qt_add_ui( fastrace_ui SOURCES
+        src/TopBarWidget.ui
+        src/TimelineWidget.ui
+        src/MessageListWidget.ui
+        src/MessageDetailsWidget.ui
+        src/DetectionsWidget.ui
+        src/ScriptEditorWidget.ui
+    )
+else()
+    target_sources(fastrace_ui PRIVATE
+        src/TopBarWidget.ui
+        src/TimelineWidget.ui
+        src/MessageListWidget.ui
+        src/MessageDetailsWidget.ui
+        src/DetectionsWidget.ui
+        src/ScriptEditorWidget.ui
+    )
+endif()
 
 
 target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent fastrace_analyzer)
