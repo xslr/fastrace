@@ -457,7 +457,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 for (size_t i = 0; i < dlen; ++i) {
                     hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[i]));
                 }
-                spdlog::debug("CAN_FD ch={} id=0x{:x}{} dlc={} len={} data: {}", msg.channel, arbId, ext ? "x" : "",
+                spdlog::info("CAN_FD ch={} id=0x{:x}{} dlc={} len={} data: {}", msg.channel, arbId, ext ? "x" : "",
                     msg.dlc, msg.validDataBytes, hex);
             }
             if (self->collectMessages) {
@@ -484,7 +484,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
 
         case CAN_FD_MESSAGE_64: {
             if (payloadBytes < sizeof(CANFDMessage64)) {
-                spdlog::debug("inner: CAN_FD_64 object too short ({} B)", payloadBytes);
+                spdlog::warn("inner: CAN_FD_64 object too short ({} B)", payloadBytes);
                 cur.skip(payloadBytes);
                 break;
             }
@@ -505,23 +505,22 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const bool brs = (msg.flags & 0x1000u) != 0;
                 const bool edl = (msg.flags & 0x2000u) != 0;
                 const size_t skip = msg.extDataOffset; // reserved bytes before actual data
-                const size_t dlen
-                    = (dataAvail > skip) ? std::min(static_cast<size_t>(msg.validDataBytes), dataAvail - skip) : 0;
+                const size_t dlen = std::min(static_cast<size_t>(msg.validDataBytes), dataAvail);
                 std::string hex;
                 hex.reserve(dlen * 3);
                 for (size_t i = 0; i < dlen; ++i) {
-                    hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[skip + i]));
+                    hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[i]));
                 }
-                spdlog::debug("CAN_FD64 ch={} id=0x{:x}{} dlc={} len={} brs={} edl={} data: {}", +msg.channel, arbId,
+                spdlog::info("CAN_FD64 ch={} id=0x{:x}{} dlc={} len={} brs={} edl={} data: {}", +msg.channel, arbId,
                     ext ? "x" : "", msg.dlc, msg.validDataBytes, brs, edl, hex);
+
+                __asm("nop");
             }
             if (self->collectMessages) {
                 const uint32_t rawId = msg.arbId;
                 const bool ext = (rawId >> 31) & 1u;
                 const size_t skip = msg.extDataOffset;
-                const size_t dlen = (dataAvail > skip)
-                    ? std::min({ static_cast<size_t>(msg.validDataBytes), dataAvail - skip, size_t { 64 } })
-                    : 0;
+                const size_t dlen = std::min(static_cast<size_t>(msg.validDataBytes), dataAvail);
                 TraceMessage tm;
                 tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
                 tm.objectType = base.objectType;
@@ -531,7 +530,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.dlc = msg.dlc;
                 tm.dataLen = static_cast<uint8_t>(dlen);
                 if (dlen > 0) {
-                    std::memcpy(tm.data, dataPtr + skip, dlen);
+                    std::memcpy(tm.data, dataPtr, dlen);
                 }
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {

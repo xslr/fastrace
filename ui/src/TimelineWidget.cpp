@@ -4,10 +4,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMouseEvent>
 #include <QScrollArea>
 #include <QVBoxLayout>
 #include <QtConcurrent>
 #include <algorithm>
+#include <spdlog/spdlog.h>
 
 #include "ui_TimelineWidget.h"
 
@@ -21,6 +23,7 @@ public:
         , m_timeline(parent)
     {
         setAttribute(Qt::WA_OpaquePaintEvent, false);
+        setMouseTracking(true);
     }
 
 protected:
@@ -28,6 +31,21 @@ protected:
     {
         QPainter p(this);
         m_timeline->paintLanesWidget(p, rect());
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override { m_timeline->handleLanesMouseMove(event->pos()); }
+
+    void leaveEvent(QEvent* event) override
+    {
+        m_timeline->handleLanesLeave();
+        QWidget::leaveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_timeline->handleLanesMousePress(event->pos());
+        }
     }
 
 private:
@@ -82,6 +100,55 @@ void TimelineWidget::attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer
 
 void TimelineWidget::paintEvent(QPaintEvent* event) { QWidget::paintEvent(event); }
 
+void TimelineWidget::handleLanesMouseMove(QPoint pos)
+{
+    int laneIdx = pos.y() / 40;
+    if (laneIdx >= static_cast<int>(m_lanes.size())) {
+        laneIdx = -1;
+    }
+    if (m_hoveredLaneIndex != laneIdx) {
+        m_hoveredLaneIndex = laneIdx;
+        if (m_signalLanesWidget) {
+            m_signalLanesWidget->update();
+        }
+    }
+}
+
+void TimelineWidget::handleLanesLeave()
+{
+    if (m_hoveredLaneIndex != -1) {
+        m_hoveredLaneIndex = -1;
+        if (m_signalLanesWidget) {
+            m_signalLanesWidget->update();
+        }
+    }
+}
+
+void TimelineWidget::handleLanesMousePress(QPoint pos)
+{
+    int laneIdx = pos.y() / 40;
+    if (laneIdx >= 0 && laneIdx < static_cast<int>(m_lanes.size())) {
+        constexpr int kLabelWidth = 120;
+        constexpr int kBtnSize = 16;
+        constexpr int kBtnMargin = 4;
+
+        QRect btnRect(kLabelWidth - kBtnMargin - kBtnSize, laneIdx * 40 + (40 - kBtnSize) / 2, kBtnSize, kBtnSize);
+        if (btnRect.contains(pos)) {
+            if (m_lanes[laneIdx].watcher) {
+                delete m_lanes[laneIdx].watcher;
+            }
+            m_lanes.erase(m_lanes.begin() + laneIdx);
+
+            if (m_signalLanesWidget) {
+                m_signalLanesWidget->setFixedHeight(static_cast<int>(m_lanes.size()) * 40);
+                m_hoveredLaneIndex = -1;
+                m_signalLanesWidget->update();
+            }
+            emit signalsChanged(currentSignalNames());
+        }
+    }
+}
+
 void TimelineWidget::paintLanesWidget(QPainter& p, QRect rect)
 {
     p.fillRect(rect, QColor(30, 30, 30));
@@ -102,6 +169,7 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
 {
     constexpr int kLabelWidth = 120;
 
+    // pick a colour for the lane
     static const QColor kColors[] = {
         QColor(80, 140, 255),
         QColor(80, 220, 120),
@@ -120,8 +188,20 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
     p.drawText(QRect(rect.left() + 4, rect.top(), kLabelWidth - 8, rect.height()), Qt::AlignLeft | Qt::AlignVCenter,
         QString::fromStdString(lane.iSignalName));
 
+    // Remove button if hovered
+    if (laneColorIdx == m_hoveredLaneIndex) {
+        constexpr int kBtnSize = 16;
+        constexpr int kBtnMargin = 4;
+        QRect btnRect(rect.left() + kLabelWidth - kBtnMargin - kBtnSize, rect.top() + (rect.height() - kBtnSize) / 2,
+            kBtnSize, kBtnSize);
+
+        p.setPen(QColor(200, 80, 80));
+        p.drawText(btnRect, Qt::AlignCenter, "✖");
+    }
+
     QRect plotRect(rect.left() + kLabelWidth, rect.top(), rect.width() - kLabelWidth, rect.height());
 
+    // loading progress indicator
     if (lane.loading && m_analyzer) {
         // Thin progress bar at top of lane
         size_t totalChunks = m_analyzer->getChunkIndex().size();
@@ -137,7 +217,8 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
         return;
     }
 
-    uint64_t maxVal = lane.bitLength > 0 ? ((uint64_t(1) << lane.bitLength) - 1u) : 1u;
+    // autofit bin values on y scale
+    uint64_t maxVal = lane.maxRaw;
     if (maxVal == 0) {
         maxVal = 1;
     }
@@ -153,7 +234,7 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
             continue;
         }
 
-        int x = plotRect.left() + static_cast<int>(static_cast<int64_t>(i) * plotW / numBins);
+        float x = float(plotRect.left()) + static_cast<float>(static_cast<int64_t>(i) * (float)plotW / (float)numBins);
 
         int yMax
             = plotBottom - static_cast<int>(static_cast<int64_t>(bin.maxRaw) * plotH / static_cast<int64_t>(maxVal));
@@ -163,10 +244,21 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
         yMin = std::max(plotRect.top(), std::min(yMin, plotBottom));
 
         p.setPen(dotColor);
-        p.drawPoint(x, yMax);
-        if (yMax != yMin) {
-            p.drawPoint(x, yMin);
-        }
+        // p.drawPoint(x, yMax);
+        // TODO: use drawRects for performance
+        // p.drawRect(x, yMin, x + plotW/numBins, yMax);
+        // int xx = plotRect.x(), yy = plotRect.y(), ww=plotRect.width(), hh=plotRect.height();
+        float xx = x;
+        float hh = float(plotRect.height()) * (float(bin.maxRaw - bin.minRaw)) / float(lane.maxRaw);
+        float yy = plotBottom - hh;
+        float ww = float(plotRect.width()) / float(numBins);
+        p.drawRect(xx, yy, ww, hh);
+        // spdlog::info("xx:{} yy:{} ww:{} hh:{}", xx, yy, ww, hh);
+        // p.fillRect(xx+5, yy+5, ww - 10, hh - 10, dotColor);
+        // p.fillRect(x, yMin, x + plotW/numBins, yMax, dotColor);
+        // if (yMax != yMin) {
+        //     p.drawPoint(x, yMin);
+        // }
     }
 }
 
@@ -210,7 +302,15 @@ void TimelineWidget::addSignalLane(const QString& name)
     lane.watcher = new QFutureWatcher<void>(this);
 
     int laneIdx = static_cast<int>(m_lanes.size()) - 1;
-    connect(lane.watcher, &QFutureWatcher<void>::finished, this, [this, laneIdx]() { onSignalJobFinished(laneIdx); });
+    auto* w = lane.watcher;
+    connect(lane.watcher, &QFutureWatcher<void>::finished, this, [this, w]() {
+        for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
+            if (m_lanes[i].watcher == w) {
+                onSignalJobFinished(i);
+                break;
+            }
+        }
+    });
 
     startSignalJob(laneIdx);
 
@@ -289,6 +389,7 @@ void TimelineWidget::onBtnAddSignalClicked()
 
 void TimelineWidget::startSignalJob(int laneIdx)
 {
+    const int laneWidth = 5;
     if (!m_analyzer || laneIdx < 0 || laneIdx >= static_cast<int>(m_lanes.size())) {
         return;
     }
@@ -299,7 +400,7 @@ void TimelineWidget::startSignalJob(int laneIdx)
     auto& lane = m_lanes[laneIdx];
     lane.loading = true;
 
-    int numBins = std::max(1, m_signalLanesWidget ? m_signalLanesWidget->width() / 4 : 200);
+    int numBins = std::max(1, m_signalLanesWidget ? m_signalLanesWidget->width() / laneWidth : 200);
 
     auto pendingBins = std::make_shared<std::vector<fastrace::SignalBin>>(numBins);
     lane.pendingBins = pendingBins;
@@ -324,6 +425,14 @@ void TimelineWidget::onSignalJobFinished(int laneIdx)
         lane.pendingBins.reset();
     }
     lane.loading = false;
+
+    lane.minRaw = 0;
+    lane.maxRaw = 0;
+
+    for (auto& bin : lane.bins) {
+        lane.minRaw = std::min(bin.minRaw, lane.minRaw);
+        lane.maxRaw = std::max(bin.maxRaw, lane.maxRaw);
+    }
 
     // Stop repaint timer if no lanes are still loading
     bool anyLoading = false;

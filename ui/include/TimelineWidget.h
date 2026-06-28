@@ -29,6 +29,11 @@ public:
     // Called by SignalLanesWidget::paintEvent
     void paintLanesWidget(QPainter& p, QRect rect);
 
+    // Called by SignalLanesWidget for interaction
+    void handleLanesMouseMove(QPoint pos);
+    void handleLanesLeave();
+    void handleLanesMousePress(QPoint pos);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -47,6 +52,8 @@ private:
         QFutureWatcher<void>* watcher = nullptr;
         bool loading = false;
         uint32_t bitLength = 0;
+        uint64_t maxRaw { 0 };
+        uint64_t minRaw { 0 };
     };
 
     QStringList currentSignalNames() const;
@@ -59,4 +66,5 @@ private:
     std::vector<SignalLane> m_lanes;
     QWidget* m_signalLanesWidget = nullptr;
     QTimer* m_repaintTimer = nullptr;
+    int m_hoveredLaneIndex = -1;
 };

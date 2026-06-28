@@ -77,6 +77,7 @@ static_assert(sizeof(CANFDMessage) == 24);
 // CAN_FD_MESSAGE_64 (type 101) fixed header; variable-length data follows.
 // payloadBytes = sizeof(CANFDMessage64) + validDataBytes (padded to next 4-byte
 // boundary).
+// based on blf header definition in wireshark
 struct CANFDMessage64 {
     uint8_t channel; // 1-based channel index
     uint8_t dlc; // raw CAN FD DLC code (0-15)
@@ -85,18 +86,18 @@ struct CANFDMessage64 {
     uint32_t arbId; // bit 31 set → extended 29-bit ID
     uint32_t frameLength; // frame length in ns
     uint32_t flags; // bit 12: BRS, bit 13: EDL, bits 20-21: channel variant
-    uint16_t btrCfgArb; // arbitration bit-timing config
-    uint16_t btrCfgData; // data-phase bit-timing config
-    uint16_t timeOffsetBrsNs; // BRS bit time offset in ns
-    uint16_t timeOffsetCrcDelNs; // CRC delimiter time offset in ns
-    uint32_t crc; // CRC of the CAN FD frame
+    uint32_t btrCfgArb; // arbitration bit-timing config
+    uint32_t btrCfgData; // data-phase bit-timing config
+    uint32_t timeOffsetBrsNs; // BRS bit time offset in ns
+    uint32_t timeOffsetCrcDelNs; // CRC delimiter time offset in ns
     uint16_t bitCount; // total bit count of frame
     uint8_t dir; // 0=Rx, 1=Tx, 2=TxRq
     uint8_t extDataOffset; // byte offset to secondary payload (0 if none)
                            // remaining bytes: reserved + data[validDataBytes] (padded to 4-byte
                            // boundary)
+    uint32_t crc; // CRC of the CAN FD frame
 };
-static_assert(sizeof(CANFDMessage64) == 32);
+static_assert(sizeof(CANFDMessage64) == 40);
 
 // ETHERNET_FRAME_EX (type 121) fixed header; variable Ethernet payload follows.
 struct EthernetFrameExHeader {
