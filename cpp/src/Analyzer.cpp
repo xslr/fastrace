@@ -506,7 +506,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const bool brs = (msg.flags & 0x1000u) != 0;
                 const bool edl = (msg.flags & 0x2000u) != 0;
                 const size_t skip = msg.extDataOffset; // reserved bytes before actual data
-                const size_t dlen = std::min(static_cast<size_t>(msg.validDataBytes), dataAvail);
+                const size_t dlen = (std::min)(static_cast<size_t>(msg.validDataBytes), dataAvail);
                 std::string hex;
                 hex.reserve(dlen * 3);
                 for (size_t i = 0; i < dlen; ++i) {
@@ -521,7 +521,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const uint32_t rawId = msg.arbId;
                 const bool ext = (rawId >> 31) & 1u;
                 const size_t skip = msg.extDataOffset;
-                const size_t dlen = std::min(static_cast<size_t>(msg.validDataBytes), dataAvail);
+                const size_t dlen = (std::min)(static_cast<size_t>(msg.validDataBytes), dataAvail);
                 TraceMessage tm;
                 tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
                 tm.objectType = base.objectType;
