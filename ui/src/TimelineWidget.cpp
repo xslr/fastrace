@@ -390,9 +390,10 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
     }
 
     int numBins = static_cast<int>(lane.bins.size());
-    int plotW = plotRect.width();
-    int plotH = plotRect.height();
-    int plotBottom = plotRect.bottom();
+    float plotW = plotRect.width();
+    float plotH = plotRect.height();
+    float plotBottom = plotRect.bottom();
+    const float laneH = (float)lane.maxRaw - (float)lane.minRaw;
 
     for (int i = 0; i < numBins; ++i) {
         const auto& bin = lane.bins[i];
@@ -403,8 +404,8 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
         float x = float(plotRect.left()) + static_cast<float>(static_cast<int64_t>(i) * (float)plotW / (float)numBins);
 
         float xx = x;
-        float hh = float(plotRect.height()) * (float(bin.maxRaw - bin.minRaw)) / float(lane.maxRaw);
-        float yy = plotBottom - hh;
+        float hh = float(plotRect.height()) * (float(bin.maxRaw - bin.minRaw)) / laneH;
+        float yy = plotRect.top() + (plotH * (float)bin.minRaw / laneH);
         float ww = float(plotRect.width()) / float(numBins);
         p.setPen(dotColor);
         p.drawRect(xx, yy, ww, hh);
