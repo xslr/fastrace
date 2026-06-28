@@ -463,7 +463,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
             if (self->collectMessages) {
                 const uint32_t rawId = msg.arbId;
                 const bool ext = (rawId >> 31) & 1u;
-                const size_t dlen = std::min({ static_cast<size_t>(msg.validDataBytes), dataAvail, size_t { 64 } });
+                const size_t dlen
+                    = (std::min)((std::min)(static_cast<size_t>(msg.validDataBytes), dataAvail), size_t { 64 });
                 TraceMessage tm;
                 tm.timestampUs = tsToMicroseconds(timestamp, objFlags);
                 tm.objectType = base.objectType;
@@ -514,7 +515,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 spdlog::info("CAN_FD64 ch={} id=0x{:x}{} dlc={} len={} brs={} edl={} data: {}", +msg.channel, arbId,
                     ext ? "x" : "", msg.dlc, msg.validDataBytes, brs, edl, hex);
 
-                __asm("nop");
+                // __asm("nop");  // removed: not portable to MSVC x64
             }
             if (self->collectMessages) {
                 const uint32_t rawId = msg.arbId;
@@ -1390,8 +1391,8 @@ size_t Analyzer::buildIndex(const std::string& filename)
 
     auto t1 = Clock::now();
     spdlog::info("buildIndex done: scanned {} containers, {} messages, {} index chunks in {:.2f} ms",
-        containerCounts.size(), totalMessages_, chunkIndex_.size(),
-        std::chrono::duration<double, std::milli>(t1 - t0).count());
+        static_cast<uint64_t>(containerCounts.size()), static_cast<uint64_t>(totalMessages_),
+        static_cast<uint64_t>(chunkIndex_.size()), std::chrono::duration<double, std::milli>(t1 - t0).count());
 
     return totalMessages_;
 }
