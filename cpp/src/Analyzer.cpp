@@ -359,7 +359,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const uint32_t rawId = msg.id;
                 const bool ext = (rawId >> 31) & 1;
                 const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
-                const uint8_t dlen = std::min(msg.dlc, uint8_t { 8 });
+                const uint8_t dlen = std::min(msg.dlc, static_cast<uint8_t>(8));
                 std::string hex;
                 hex.reserve(dlen * 3);
                 for (uint8_t i = 0; i < dlen; ++i) {
@@ -378,7 +378,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
                 tm.extendedId = ext;
                 tm.dlc = msg.dlc;
-                tm.dataLen = std::min(msg.dlc, uint8_t { 8 });
+                tm.dataLen = std::min(msg.dlc, static_cast<uint8_t>(8));
                 std::memcpy(tm.data, msg.data, tm.dataLen);
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
@@ -405,7 +405,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
 
             ++counts[base.objectType];
             if (self->dumpObjContents) {
-                const size_t dumpLen = std::min(frameLen, size_t { 20 });
+                const size_t dumpLen = std::min(frameLen, static_cast<size_t>(20));
                 std::string hex;
                 hex.reserve(dumpLen * 3);
                 for (size_t i = 0; i < dumpLen; ++i) {
@@ -421,7 +421,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.objectType = base.objectType;
                 tm.channel = eth.channel;
                 tm.dlc = 0;
-                tm.dataLen = static_cast<uint8_t>(std::min(frameLen, size_t { 64 }));
+                tm.dataLen = static_cast<uint8_t>(std::min(frameLen, static_cast<size_t>(64)));
                 std::memcpy(tm.data, frameData, tm.dataLen);
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
