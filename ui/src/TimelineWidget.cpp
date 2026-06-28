@@ -659,8 +659,8 @@ void TimelineWidget::startRangeJob(int laneIdx)
     lane.pendingBins = pendingBins;
 
     std::string name = lane.iSignalName;
-    auto future = QtConcurrent::run([analyzer = m_analyzer, name, numBins, pendingBins, winStart, winEnd]() mutable {
-        analyzer->buildSignalTimeSeriesRange(name, numBins, *pendingBins, winStart, winEnd);
+    auto future = QtConcurrent::run([analyzer = m_analyzer, name, numBins, pendingBins, s = winStart, e = winEnd]() mutable {
+        analyzer->buildSignalTimeSeriesRange(name, numBins, *pendingBins, s, e);
     });
     lane.watcher->setFuture(future);
     m_repaintTimer->start();
