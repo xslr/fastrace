@@ -1,3 +1,33 @@
+/**
+ * \file TimelineOverviewWidget.cpp
+ * \brief Implementation of the full-trace density heatmap (mini-map) widget.
+ *
+ * \details TimelineOverviewWidget paints a bird's-eye density view of the
+ * entire loaded trace.  Up to two horizontal lanes are drawn:
+ *
+ *  - **CAN lane** (blue hue)     \u2014 message count per time bin for all CAN frames.
+ *  - **Ethernet lane** (teal hue) \u2014 message count per time bin for Ethernet frames.
+ *
+ * Each lane's colour intensity is normalised to its own per-bin peak so
+ * that sparse and dense traces are rendered comparably.
+ *
+ * Async histogram model:
+ *  restartHistogramJob() launches Analyzer::buildHistogram() via
+ *  QtConcurrent::run(), then starts a 100 ms repaint timer to animate a
+ *  thin progress bar.  resizeEvent() debounces (200 ms) before restarting
+ *  the job so that interactive resizing does not spam background threads.
+ *
+ * Navigation:
+ *  mousePressEvent() converts the click x-coordinate to a trace timestamp
+ *  and emits navigateRequested() so the parent view can seek the message
+ *  list to that position.
+ *
+ * Visible-window overlay:
+ *  setVisibleWindow() stores the current viewport bounds; the next
+ *  paintEvent() draws a semi-transparent rectangle over the corresponding
+ *  region of the heatmap.
+ */
+
 #include "TimelineOverviewWidget.h"
 
 #include <QCheckBox>

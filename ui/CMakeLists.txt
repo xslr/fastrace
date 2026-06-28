@@ -82,3 +82,9 @@ target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_
 # ui/src/ must be on the include path so that the AUTOUIC-generated
 # headers can find their necessary files.
 target_include_directories(fastrace_ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+add_subdirectory(tests)
+

@@ -1,3 +1,21 @@
+/**
+ * \file TimelineWidget.h
+ * \brief Signal-timeline panel that renders one horizontal lane per ISignal.
+ *
+ * \details TimelineWidget is a QWidget-based panel that lets the user add
+ * named ISignals from the loaded AR database and displays each as a
+ * min/max value histogram over the full trace duration.  Each signal
+ * occupies a fixed-height lane; hovering reveals a remove button.
+ *
+ * Histogram data is computed asynchronously via QtConcurrent so the UI
+ * thread is never blocked.  A QTimer drives periodic repaints while a
+ * background job is in progress.
+ *
+ * Interaction summary:
+ *  - "+ Signal" button → opens a searchable signal-picker dialog.
+ *  - Hover over a lane → shows a remove (\c ✖) button on the left label.
+ *  - Click the remove button → deletes the lane and emits signalsChanged().
+ */
 #pragma once
 #include "Analyzer.h"
 #include <QFutureWatcher>
@@ -33,6 +51,12 @@ public:
     void handleLanesMouseMove(QPoint pos);
     void handleLanesLeave();
     void handleLanesMousePress(QPoint pos);
+
+    // ── Test accessors (const, zero-overhead) ────────────────────────────────
+    /// Returns the index of the currently hovered lane, or -1 if none.
+    int hoveredLaneIndex() const { return m_hoveredLaneIndex; }
+    /// Returns the number of signal lanes currently displayed.
+    int laneCount() const { return static_cast<int>(m_lanes.size()); }
 
 protected:
     void paintEvent(QPaintEvent* event) override;

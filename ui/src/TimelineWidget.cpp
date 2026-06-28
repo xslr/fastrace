@@ -1,3 +1,31 @@
+/**
+ * \file TimelineWidget.cpp
+ * \brief Implementation of the signal-timeline panel.
+ *
+ * \details This file implements two cooperating classes:
+ *
+ *  - **SignalLanesWidget** (internal, not exposed in headers): a plain
+ *    QWidget that fills the scroll area and delegates all painting and
+ *    mouse events back to TimelineWidget.  Separating it from the outer
+ *    widget simplifies scroll-area management.
+ *
+ *  - **TimelineWidget**: the public panel.  It owns a list of SignalLane
+ *    structs, one per added ISignal.  Each lane holds the computed
+ *    histogram bins (min/max raw value per pixel-wide slot) together
+ *    with the QFutureWatcher that tracks the asynchronous job.
+ *
+ * Async model:
+ *  startSignalJob() launches QtConcurrent::run() and starts a 100 ms
+ *  repaint timer so the progress bar animates.  onSignalJobFinished()
+ *  swaps in the completed bin vector and stops the timer once all lanes
+ *  have finished loading.
+ *
+ * Lane geometry:
+ *  Each lane is 40 px tall.  The left 120 px is the label area
+ *  (signal name + hover-to-reveal remove button); the remainder is
+ *  the plot area.
+ */
+
 #include "TimelineWidget.h"
 
 #include <QDialog>
