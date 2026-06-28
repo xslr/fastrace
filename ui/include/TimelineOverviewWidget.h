@@ -15,7 +15,10 @@
  * rectangle marks the currently visible time window.
  *
  * Key signals:
- *  - navigateRequested(uint64_t timestampUs) — emitted on mouse click.
+ *  - navigateRequested(uint64_t timestampUs) — emitted on mouse click
+ *    outside the visible-window rectangle.
+ *  - windowPanRequested(uint64_t startUs, uint64_t endUs) — emitted
+ *    while dragging the visible-window rectangle to pan the timeline.
  */
 #pragma once
 
@@ -54,12 +57,16 @@ public:
 
 signals:
     void navigateRequested(uint64_t timestampUs);
+    /// Emitted while dragging the visible-window rectangle; the receiver
+    /// should pan its timeline view to [startUs, endUs].
+    void windowPanRequested(uint64_t startUs, uint64_t endUs);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
 
 private slots:
     void onLaneToggled();
@@ -67,6 +74,16 @@ private slots:
 
 private:
     void restartHistogramJob();
+
+    /// Converts a widget X coordinate to a trace timestamp.
+    /// Returns 0 if no analyzer is attached or x is out of range.
+    uint64_t xToTimestamp(int x) const;
+
+    /// Returns the pixel X that corresponds to the given timestamp.
+    int timestampToX(uint64_t ts) const;
+
+    /// Returns the pixel rect of the visible-window overlay, or an empty rect.
+    QRect visibleWindowRect() const;
 
     std::shared_ptr<fastrace::Analyzer> m_analyzer;
 
@@ -76,6 +93,12 @@ private:
     // UI state
     uint64_t m_visibleStartUs = 0;
     uint64_t m_visibleEndUs = 0;
+
+    // Drag state for the visible-window rectangle
+    bool m_dragging = false;
+    int m_dragStartX = 0; ///< widget X where drag began
+    uint64_t m_dragWinStartUs = 0; ///< m_visibleStartUs at drag start
+    uint64_t m_dragWinEndUs = 0; ///< m_visibleEndUs at drag start
 
     // Async jobs
     QFutureWatcher<void> m_histogramWatcher;

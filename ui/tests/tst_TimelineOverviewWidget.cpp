@@ -175,6 +175,73 @@ private slots:
 
         QVERIFY(true);
     }
+
+    // ------------------------------------------------------------------
+    // 8. windowPanRequested is not emitted when there is no analyzer
+    // ------------------------------------------------------------------
+    /**
+     * \brief Dragging the mouse across the widget must not emit
+     * windowPanRequested() when no Analyzer is attached (no overlay rect
+     * exists to drag, and the drag-start guard will never activate).
+     */
+    void noAnalyzer_drag_doesNotEmitWindowPanRequested()
+    {
+        TimelineOverviewWidget w;
+        w.resize(800, 120);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        QSignalSpy spy(&w, &TimelineOverviewWidget::windowPanRequested);
+
+        // Press + move + release across the widget
+        QTest::mousePress(&w, Qt::LeftButton, Qt::NoModifier, QPoint(200, 60));
+        QTest::mouseMove(&w, QPoint(400, 60));
+        QTest::mouseRelease(&w, Qt::LeftButton, Qt::NoModifier, QPoint(400, 60));
+
+        QCOMPARE(spy.count(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // 9. setVisibleWindow then mouseRelease clears drag state (no crash)
+    // ------------------------------------------------------------------
+    /**
+     * \brief A mouseReleaseEvent arriving without a prior drag-start must
+     * not crash (guards against out-of-order events).
+     */
+    void mouseRelease_withoutDrag_doesNotCrash()
+    {
+        TimelineOverviewWidget w;
+        w.resize(800, 120);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        // Release without a prior press — should be a safe no-op
+        QTest::mouseRelease(&w, Qt::LeftButton, Qt::NoModifier, QPoint(400, 60));
+
+        QVERIFY(true);
+    }
+
+    // ------------------------------------------------------------------
+    // 10. setVisibleWindow with equal start/end does not paint a rect
+    // ------------------------------------------------------------------
+    /**
+     * \brief setVisibleWindow(t, t) (zero-width window) must be stored
+     * but must not trigger any crash or assertion during paint.
+     */
+    void setVisibleWindow_zeroWidth_doesNotCrash()
+    {
+        TimelineOverviewWidget w;
+        w.resize(800, 120);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        w.setVisibleWindow(3'000'000, 3'000'000);
+        QApplication::processEvents(); // trigger repaint
+
+        QCOMPARE(w.visibleStartUs(), uint64_t(3'000'000));
+        QCOMPARE(w.visibleEndUs(), uint64_t(3'000'000));
+        QVERIFY(true);
+    }
 };
 
 QTEST_MAIN(tst_TimelineOverviewWidget)

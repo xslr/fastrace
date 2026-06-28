@@ -5,8 +5,8 @@
  * \details TimelineOverviewWidget paints a bird's-eye density view of the
  * entire loaded trace.  Up to two horizontal lanes are drawn:
  *
- *  - **CAN lane** (blue hue)     \u2014 message count per time bin for all CAN frames.
- *  - **Ethernet lane** (teal hue) \u2014 message count per time bin for Ethernet frames.
+ *  - **CAN lane** (blue hue)      — message count per time bin for all CAN frames.
+ *  - **Ethernet lane** (teal hue) — message count per time bin for Ethernet frames.
  *
  * Each lane's colour intensity is normalised to its own per-bin peak so
  * that sparse and dense traces are rendered comparably.
@@ -20,12 +20,15 @@
  * Navigation:
  *  mousePressEvent() converts the click x-coordinate to a trace timestamp
  *  and emits navigateRequested() so the parent view can seek the message
- *  list to that position.
+ *  list to that position — unless the click lands inside the visible-window
+ *  rectangle, which starts a drag pan operation instead.
  *
  * Visible-window overlay:
  *  setVisibleWindow() stores the current viewport bounds; the next
  *  paintEvent() draws a semi-transparent rectangle over the corresponding
- *  region of the heatmap.
+ *  region of the heatmap.  The rectangle is draggable: pressing inside it
+ *  and moving the mouse emits windowPanRequested(startUs, endUs) so the
+ *  connected TimelineWidget can follow.
  */
 
 #include "TimelineOverviewWidget.h"
@@ -42,6 +45,9 @@
 #include <spdlog/spdlog.h>
 
 #include "Analyzer.h"
+
+static constexpr int kLabelWidth = 50;
+static constexpr int kYOffset = 30; // Below checkbox row
 
 TimelineOverviewWidget::TimelineOverviewWidget(QWidget* parent)
     : QWidget(parent)
@@ -107,6 +113,75 @@ void TimelineOverviewWidget::activate() { }
 
 void TimelineOverviewWidget::deactivate() { }
 
+// ---------------------------------------------------------------------------
+// Coordinate helpers
+// ---------------------------------------------------------------------------
+
+uint64_t TimelineOverviewWidget::xToTimestamp(int x) const
+{
+    if (!m_analyzer) {
+        return 0;
+    }
+    const auto& hist = m_analyzer->histogram();
+    const uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
+    if (durationUs == 0) {
+        return 0;
+    }
+    const int w = width() - kLabelWidth;
+    if (w <= 0) {
+        return 0;
+    }
+    const int plotX = x - kLabelWidth;
+    if (plotX < 0 || plotX >= w) {
+        return 0;
+    }
+    return hist.traceStartUs + static_cast<uint64_t>(plotX) * durationUs / static_cast<uint64_t>(w);
+}
+
+int TimelineOverviewWidget::timestampToX(uint64_t ts) const
+{
+    if (!m_analyzer) {
+        return kLabelWidth;
+    }
+    const auto& hist = m_analyzer->histogram();
+    const uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
+    if (durationUs == 0) {
+        return kLabelWidth;
+    }
+    const int w = width() - kLabelWidth;
+    return kLabelWidth + static_cast<int>(static_cast<uint64_t>(w) * (ts - hist.traceStartUs) / durationUs);
+}
+
+QRect TimelineOverviewWidget::visibleWindowRect() const
+{
+    if (!m_analyzer || m_visibleEndUs <= m_visibleStartUs) {
+        return {};
+    }
+    const auto& hist = m_analyzer->histogram();
+    const uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
+    if (durationUs == 0) {
+        return {};
+    }
+    const int w = width() - kLabelWidth;
+
+    int xStart = kLabelWidth
+        + static_cast<int>(static_cast<uint64_t>(w) * (m_visibleStartUs - hist.traceStartUs) / durationUs);
+    int xEnd
+        = kLabelWidth + static_cast<int>(static_cast<uint64_t>(w) * (m_visibleEndUs - hist.traceStartUs) / durationUs);
+
+    xStart = std::max(kLabelWidth, std::min(xStart, kLabelWidth + w));
+    xEnd = std::max(kLabelWidth, std::min(xEnd, kLabelWidth + w));
+
+    if (xEnd <= xStart) {
+        return {};
+    }
+    return QRect(xStart, kYOffset, xEnd - xStart, height() - kYOffset);
+}
+
+// ---------------------------------------------------------------------------
+// Paint
+// ---------------------------------------------------------------------------
+
 void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
 {
     QWidget::paintEvent(event);
@@ -117,13 +192,12 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, false);
 
-    int labelWidth = 50;
-    int w = width() - labelWidth;
+    int w = width() - kLabelWidth;
     if (w <= 0) {
         return;
     }
 
-    int yOffset = 30; // Below checkbox row
+    int yOffset = kYOffset;
 
     // Fill background
     painter.fillRect(rect(), Qt::white);
@@ -134,7 +208,7 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
         if (totalChunks > 0) {
             size_t processed = m_analyzer->histogramChunksProcessed.load(std::memory_order_relaxed);
             float progress = static_cast<float>(processed) / totalChunks;
-            painter.fillRect(labelWidth, yOffset - 2, static_cast<int>(w * progress), 2, Qt::blue);
+            painter.fillRect(kLabelWidth, yOffset - 2, static_cast<int>(w * progress), 2, Qt::blue);
         }
     }
 
@@ -145,7 +219,7 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
     painter.setPen(Qt::black);
     int numLabels = 6;
     for (int i = 0; i <= numLabels; ++i) {
-        int x = labelWidth + (w * i) / numLabels;
+        int x = kLabelWidth + (w * i) / numLabels;
         uint64_t t = hist.traceStartUs + (durationUs * i) / numLabels;
         QString timeStr = QString::number(static_cast<float>(t) / 1000000.0, 'f', 1) + "s";
         painter.drawText(x - 20, yOffset, 100, 15, Qt::AlignCenter, timeStr);
@@ -156,7 +230,7 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
 
     auto drawLane = [&](size_t groupIdx, const QString& name, float hue) {
         painter.setPen(Qt::black);
-        painter.drawText(QRect(0, yOffset, labelWidth - 5, laneHeight), Qt::AlignRight | Qt::AlignVCenter, name);
+        painter.drawText(QRect(0, yOffset, kLabelWidth - 5, laneHeight), Qt::AlignRight | Qt::AlignVCenter, name);
 
         uint32_t maxCount = 0;
         if (hist.bins[groupIdx].size() > 0) {
@@ -165,9 +239,6 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
                 if (binIndex < hist.bins[groupIdx].size()) {
                     uint32_t count = hist.bins[groupIdx][binIndex];
                     if (count > maxCount) {
-                        // if (groupIdx == 1) {
-                        //     spdlog::info("group:{} update maxCount={} -> {}", groupIdx, maxCount, count);
-                        // }
                         maxCount = count;
                     }
                 }
@@ -185,10 +256,7 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
             }
             const float intensity = maxCount > 0 ? static_cast<float>(count) / maxCount : 0.0f;
             const float lightness = 0.95f - intensity * 0.7f;
-            // if (groupIdx == 1) {
-            //     spdlog::info("group:{} count:{} intensity:{} lightness:{}", groupIdx, count, intensity, lightness);
-            // }
-            painter.fillRect(labelWidth + x, yOffset, 1, laneHeight, QColor::fromHslF(hue, 0.7f, lightness));
+            painter.fillRect(kLabelWidth + x, yOffset, 1, laneHeight, QColor::fromHslF(hue, 0.7f, lightness));
         }
         yOffset += laneHeight + 1;
     };
@@ -200,23 +268,24 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
         drawLane(static_cast<size_t>(fastrace::ProtocolGroup::Ethernet), "ETH", 0.45f); // Teal
     }
 
-    // FIXME: the visible window overlay does not work currently. This shall be tackled after implementing signal
-    // rendering
+    // Draw visible window overlay rectangle
+    const QRect winRect = visibleWindowRect();
+    if (!winRect.isEmpty()) {
+        // Semi-transparent fill
+        painter.setBrush(QColor(255, 255, 255, 60));
+        painter.setPen(QColor(80, 160, 255, 200));
+        painter.drawRect(winRect);
 
-    // Draw visible window overlay
-    if (m_visibleEndUs > m_visibleStartUs && durationUs > 0) {
-        int xStart = labelWidth + (w * (m_visibleStartUs - hist.traceStartUs)) / durationUs;
-        int xEnd = labelWidth + (w * (m_visibleEndUs - hist.traceStartUs)) / durationUs;
-        xStart = std::max(labelWidth, std::min(xStart, labelWidth + w));
-        xEnd = std::max(labelWidth, std::min(xEnd, labelWidth + w));
-
-        if (xEnd > xStart) {
-            painter.setPen(QColor(255, 255, 255, 150));
-            painter.setBrush(QColor(255, 255, 255, 80));
-            painter.drawRect(xStart, 30, xEnd - xStart, yOffset - 30);
-        }
+        // Subtle drag handle hint: slightly darker border on left/right edges
+        painter.setPen(QColor(80, 160, 255, 230));
+        painter.drawLine(winRect.left(), winRect.top(), winRect.left(), winRect.bottom());
+        painter.drawLine(winRect.right(), winRect.top(), winRect.right(), winRect.bottom());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
 
 void TimelineOverviewWidget::resizeEvent(QResizeEvent* event)
 {
@@ -231,13 +300,24 @@ void TimelineOverviewWidget::mousePressEvent(QMouseEvent* event)
         return;
     }
 
-    int labelWidth = 50;
-    int w = width() - labelWidth;
+    const QRect winRect = visibleWindowRect();
+    if (!winRect.isEmpty() && winRect.contains(event->pos())) {
+        // Start drag-pan inside the visible-window rectangle
+        m_dragging = true;
+        m_dragStartX = event->pos().x();
+        m_dragWinStartUs = m_visibleStartUs;
+        m_dragWinEndUs = m_visibleEndUs;
+        setCursor(Qt::SizeHorCursor);
+        return;
+    }
+
+    // Navigate to clicked position (outside the rectangle)
+    const int w = width() - kLabelWidth;
     if (w <= 0) {
         return;
     }
 
-    int x = event->pos().x() - labelWidth;
+    const int x = event->pos().x() - kLabelWidth;
     if (x >= 0 && x < w) {
         const auto& hist = m_analyzer->histogram();
         uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
@@ -253,22 +333,50 @@ void TimelineOverviewWidget::mouseMoveEvent(QMouseEvent* event)
         return;
     }
 
-    // FIXME: the vertical offset is wrong. this considers that the lanes start from y=0.
-    // it does not consider that lanes start after tooltips.
-    // This results in tooltips for lane 1 overlapping with lane 0 and tooltips for lane 0 rendering on timestamp
-    // labels.
+    if (m_dragging) {
+        const auto& hist = m_analyzer->histogram();
+        const uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
+        const int w = width() - kLabelWidth;
+        if (w <= 0 || durationUs == 0) {
+            return;
+        }
 
-    int labelWidth = 50;
-    int w = width() - labelWidth;
+        const int dx = event->pos().x() - m_dragStartX;
+        // Convert pixel delta to timestamp delta
+        const int64_t deltaUs = static_cast<int64_t>(dx) * static_cast<int64_t>(durationUs) / static_cast<int64_t>(w);
+
+        int64_t newStart = static_cast<int64_t>(m_dragWinStartUs) + deltaUs;
+        int64_t newEnd = static_cast<int64_t>(m_dragWinEndUs) + deltaUs;
+        const int64_t winWidth = static_cast<int64_t>(m_dragWinEndUs - m_dragWinStartUs);
+
+        // Clamp so the window stays within the trace
+        if (newStart < static_cast<int64_t>(hist.traceStartUs)) {
+            newStart = static_cast<int64_t>(hist.traceStartUs);
+            newEnd = newStart + winWidth;
+        }
+        if (newEnd > static_cast<int64_t>(hist.traceEndUs)) {
+            newEnd = static_cast<int64_t>(hist.traceEndUs);
+            newStart = newEnd - winWidth;
+        }
+
+        m_visibleStartUs = static_cast<uint64_t>(newStart);
+        m_visibleEndUs = static_cast<uint64_t>(newEnd);
+        update();
+        emit windowPanRequested(m_visibleStartUs, m_visibleEndUs);
+        return;
+    }
+
+    // Tooltip on hover
+    const int w = width() - kLabelWidth;
     if (w <= 0) {
         return;
     }
 
-    int x = event->pos().x() - labelWidth;
-    int y = event->pos().y();
+    const int x = event->pos().x() - kLabelWidth;
+    const int y = event->pos().y();
 
     if (x >= 0 && x < w) {
-        int yOffset = 30;
+        int yOffset = kYOffset;
         int laneHeight = 18;
 
         QString laneName;
@@ -307,6 +415,19 @@ void TimelineOverviewWidget::mouseMoveEvent(QMouseEvent* event)
     QToolTip::hideText();
 }
 
+void TimelineOverviewWidget::mouseReleaseEvent(QMouseEvent* event)
+{
+    QWidget::mouseReleaseEvent(event);
+    if (m_dragging) {
+        m_dragging = false;
+        unsetCursor();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slots
+// ---------------------------------------------------------------------------
+
 void TimelineOverviewWidget::onLaneToggled() { update(); }
 
 void TimelineOverviewWidget::onHistogramFinished()
@@ -327,8 +448,7 @@ void TimelineOverviewWidget::restartHistogramJob()
     }
     m_analyzer->histogramCancelled.store(false, std::memory_order_relaxed);
 
-    int labelWidth = 50;
-    int w = width() - labelWidth;
+    const int w = width() - kLabelWidth;
     if (w <= 0) {
         return;
     }

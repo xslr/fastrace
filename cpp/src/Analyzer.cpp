@@ -1662,6 +1662,96 @@ void Analyzer::buildSignalTimeSeries(const std::string& iSignalName, int numBins
 }
 
 // ---------------------------------------------------------------------------
+// buildSignalTimeSeriesRange – range-bounded signal histogram
+// ---------------------------------------------------------------------------
+void Analyzer::buildSignalTimeSeriesRange(
+    const std::string& iSignalName, int numBins, std::vector<SignalBin>& out, uint64_t startUs, uint64_t endUs)
+{
+    if (numBins <= 0 || chunkIndex_.empty()) {
+        return;
+    }
+
+    // Locate signal in arDatabase
+    uint32_t arbId = 0;
+    ArSignal sigDef;
+    bool found = false;
+    for (const auto& msg : m_arDatabase_.messages) {
+        for (const auto& sig : msg.signalDefs) {
+            if (sig.name == iSignalName) {
+                arbId = msg.canId;
+                sigDef = sig;
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+
+    if (!found) {
+        return;
+    }
+
+    // Clamp requested range to actual trace bounds
+    const uint64_t traceStart = histogram_.traceStartUs;
+    const uint64_t traceEnd = histogram_.traceEndUs;
+    if (traceEnd <= traceStart) {
+        return;
+    }
+
+    const uint64_t rangeStart = (startUs < traceStart) ? traceStart : startUs;
+    const uint64_t rangeEnd = (endUs == 0 || endUs > traceEnd) ? traceEnd : endUs;
+    if (rangeEnd <= rangeStart) {
+        return;
+    }
+
+    const uint64_t duration = rangeEnd - rangeStart;
+    const uint64_t binWidth = duration / static_cast<uint64_t>(numBins);
+    if (binWidth == 0) {
+        return;
+    }
+
+    out.resize(numBins);
+    for (int i = 0; i < numBins; ++i) {
+        out[i] = SignalBin {};
+        out[i].timestampUs = rangeStart + static_cast<uint64_t>(i) * binWidth + binWidth / 2;
+    }
+
+    histogramChunksProcessed.store(0, std::memory_order_relaxed);
+
+    for (size_t ci = 0; ci < chunkIndex_.size(); ++ci) {
+        if (histogramCancelled.load(std::memory_order_relaxed)) {
+            break;
+        }
+        auto msgs = decodeChunk(ci);
+        for (const auto& msg : msgs) {
+            if (msg.arbId != arbId) {
+                continue;
+            }
+            if (msg.timestampUs < rangeStart || msg.timestampUs >= rangeEnd) {
+                continue;
+            }
+            uint64_t raw
+                = extractSignalRaw(msg.data, msg.dataLen, sigDef.startBit, sigDef.bitLength, sigDef.isBigEndian);
+            size_t binIdx = (msg.timestampUs - rangeStart) / binWidth;
+            if (binIdx < static_cast<size_t>(numBins)) {
+                auto& bin = out[binIdx];
+                if (!bin.hasData) {
+                    bin.minRaw = raw;
+                    bin.maxRaw = raw;
+                    bin.hasData = true;
+                } else {
+                    bin.minRaw = std::min(bin.minRaw, raw);
+                    bin.maxRaw = std::max(bin.maxRaw, raw);
+                }
+            }
+        }
+        histogramChunksProcessed.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // processFile – top-level orchestrator
 // ---------------------------------------------------------------------------
 void Analyzer::processFile(const std::string& filename)

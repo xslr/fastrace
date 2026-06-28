@@ -51,6 +51,16 @@ OverviewView::OverviewView(TimelineOverviewWidget* timelineOverview, TimelineWid
 
     connect(
         m_messageList, &MessageListWidget::messageSelected, m_messageDetails, &MessageDetailsWidget::updateFromMessage);
+
+    // ── Zoom ↔ overview synchronisation ──────────────────────────────────────
+    // TimelineWidget emits visibleWindowChanged when the user scrolls to zoom.
+    // TimelineOverviewWidget shows the resulting rectangle.
+    connect(m_timeline, &TimelineWidget::visibleWindowChanged, m_timelineOverview,
+        &TimelineOverviewWidget::setVisibleWindow);
+
+    // Dragging the rectangle in the overview pans the timeline.
+    connect(
+        m_timelineOverview, &TimelineOverviewWidget::windowPanRequested, m_timeline, &TimelineWidget::setVisibleWindow);
 }
 
 void OverviewView::activate()

@@ -99,6 +99,11 @@ public:
 
     void buildSignalTimeSeries(const std::string& iSignalName, int numBins, std::vector<SignalBin>& out);
 
+    /// Range-bounded variant: only bins within [startUs, endUs] are computed.
+    /// Equivalent to buildSignalTimeSeries when startUs==0 && endUs==0.
+    void buildSignalTimeSeriesRange(
+        const std::string& iSignalName, int numBins, std::vector<SignalBin>& out, uint64_t startUs, uint64_t endUs);
+
 private:
     std::vector<ChunkEntry> chunkIndex_;
     HistogramData histogram_;

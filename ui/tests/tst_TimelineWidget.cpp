@@ -117,6 +117,66 @@ private slots:
         // Without an analyzer we verify indirectly via laneCount.
         QCOMPARE(w.laneCount(), 0);
     }
+
+    // ------------------------------------------------------------------
+    // 6. visibleStartUs / visibleEndUs are 0 by default
+    // ------------------------------------------------------------------
+    /**
+     * \brief The visible window accessors must return 0/0 after construction,
+     * indicating the full trace is visible (no zoom applied).
+     */
+    void defaultConstruction_visibleWindow_isZero()
+    {
+        TimelineWidget w;
+        QCOMPARE(w.visibleStartUs(), uint64_t(0));
+        QCOMPARE(w.visibleEndUs(), uint64_t(0));
+    }
+
+    // ------------------------------------------------------------------
+    // 7. setVisibleWindow without analyzer is a no-op
+    // ------------------------------------------------------------------
+    /**
+     * \brief setVisibleWindow() must silently return and not emit
+     * visibleWindowChanged() when no Analyzer is attached.
+     */
+    void noAnalyzer_setVisibleWindow_isNoop()
+    {
+        TimelineWidget w;
+        QSignalSpy spy(&w, &TimelineWidget::visibleWindowChanged);
+
+        w.setVisibleWindow(1'000'000, 5'000'000);
+
+        // No analyzer → early return; values stay at default 0/0
+        QCOMPARE(w.visibleStartUs(), uint64_t(0));
+        QCOMPARE(w.visibleEndUs(), uint64_t(0));
+        QCOMPARE(spy.count(), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // 8. handleLanesWheel without analyzer does not crash
+    // ------------------------------------------------------------------
+    /**
+     * \brief Simulating a wheel event on the lanes widget must be safe
+     * when no Analyzer is attached — the early-return guard fires.
+     */
+    void noAnalyzer_wheelEvent_doesNotCrash()
+    {
+        TimelineWidget w;
+        w.resize(600, 300);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+
+        // Synthesise a wheel event; the SignalLanesWidget delegates to
+        // handleLanesWheel() which returns early without an analyzer.
+        QWheelEvent wheel(QPointF(300, 150), QPointF(300, 150), QPoint(0, 0), QPoint(0, 120), Qt::NoButton,
+            Qt::NoModifier, Qt::ScrollBegin, false);
+
+        // Send to the TimelineWidget directly (outer widget).
+        QApplication::sendEvent(&w, &wheel);
+
+        // No crash — if we reach here the test passes.
+        QVERIFY(true);
+    }
 };
 
 QTEST_MAIN(tst_TimelineWidget)

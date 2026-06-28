@@ -20,6 +20,14 @@
  *  swaps in the completed bin vector and stops the timer once all lanes
  *  have finished loading.
  *
+ * Zoom model:
+ *  handleLanesWheel() adjusts [m_visibleStartUs, m_visibleEndUs] at 1.2×
+ *  per scroll notch toward the cursor time position.  After the adjustment
+ *  it immediately calls applySubsampledView() (instant repaint from the
+ *  cached full-trace bins) and arms a 200 ms debounce timer.  When the
+ *  timer fires, startRangeJob() launches a high-resolution re-fetch for
+ *  the zoomed window via buildSignalTimeSeriesRange().
+ *
  * Lane geometry:
  *  Each lane is 40 px tall.  The left 120 px is the label area
  *  (signal name + hover-to-reveal remove button); the remainder is
@@ -35,11 +43,19 @@
 #include <QMouseEvent>
 #include <QScrollArea>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QtConcurrent>
 #include <algorithm>
 #include <spdlog/spdlog.h>
 
 #include "ui_TimelineWidget.h"
+
+// Zoom factor applied per scroll-wheel notch (1.2 = 20 % per step).
+static constexpr double kZoomFactor = 1.2;
+// Minimum visible window width in microseconds (1 ms).
+static constexpr uint64_t kMinWindowUs = 1'000;
+// Debounce interval in ms before a full-resolution re-fetch fires.
+static constexpr int kZoomDebounceMs = 200;
 
 // ---------------------------------------------------------------------------
 // SignalLanesWidget — paints lane content inside the scroll area
@@ -76,6 +92,8 @@ protected:
         }
     }
 
+    void wheelEvent(QWheelEvent* event) override { m_timeline->handleLanesWheel(event); }
+
 private:
     TimelineWidget* m_timeline;
 };
@@ -110,6 +128,11 @@ TimelineWidget::TimelineWidget(QWidget* parent)
         }
     });
 
+    m_zoomDebounceTimer = new QTimer(this);
+    m_zoomDebounceTimer->setSingleShot(true);
+    m_zoomDebounceTimer->setInterval(kZoomDebounceMs);
+    connect(m_zoomDebounceTimer, &QTimer::timeout, this, &TimelineWidget::onZoomDebounceTimeout);
+
     connect(ui->btnAddSignal, &QPushButton::clicked, this, &TimelineWidget::onBtnAddSignalClicked);
 }
 
@@ -118,6 +141,9 @@ TimelineWidget::~TimelineWidget() { delete ui; }
 void TimelineWidget::attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer)
 {
     m_analyzer = std::move(analyzer);
+    // Reset the visible window so the full trace is shown on reload.
+    m_visibleStartUs = 0;
+    m_visibleEndUs = 0;
     // Re-run all existing lanes with the new analyzer (e.g. after trace reload).
     if (m_analyzer && !m_analyzer->getChunkIndex().empty()) {
         for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
@@ -177,6 +203,102 @@ void TimelineWidget::handleLanesMousePress(QPoint pos)
     }
 }
 
+void TimelineWidget::handleLanesWheel(QWheelEvent* event)
+{
+    if (!m_analyzer) {
+        event->ignore();
+        return;
+    }
+
+    const auto& hist = m_analyzer->histogram();
+    const uint64_t traceStart = hist.traceStartUs;
+    const uint64_t traceEnd = hist.traceEndUs;
+    if (traceEnd <= traceStart) {
+        event->ignore();
+        return;
+    }
+
+    // Determine current window (default = full trace)
+    uint64_t winStart = (m_visibleStartUs == 0 && m_visibleEndUs == 0) ? traceStart : m_visibleStartUs;
+    uint64_t winEnd = (m_visibleStartUs == 0 && m_visibleEndUs == 0) ? traceEnd : m_visibleEndUs;
+
+    // Map cursor X to a timestamp in the current window
+    constexpr int kLabelWidth = 120;
+    const int plotW = m_signalLanesWidget ? m_signalLanesWidget->width() - kLabelWidth : width() - kLabelWidth;
+    const int cursorX = event->position().x() - kLabelWidth;
+
+    const uint64_t cursorUs = (plotW > 0 && cursorX >= 0)
+        ? winStart + static_cast<uint64_t>(cursorX) * (winEnd - winStart) / static_cast<uint64_t>(plotW)
+        : (winStart + winEnd) / 2;
+
+    // Scroll up (positive angleDelta.y) = zoom in = shrink window
+    const bool zoomIn = event->angleDelta().y() > 0;
+    const double factor = zoomIn ? (1.0 / kZoomFactor) : kZoomFactor;
+
+    const double newHalfSpan = static_cast<double>(winEnd - winStart) * factor / 2.0;
+    const double cursorFrac
+        = (winEnd > winStart) ? static_cast<double>(cursorUs - winStart) / static_cast<double>(winEnd - winStart) : 0.5;
+
+    // Anchor the cursor: the fraction of the window at the cursor stays fixed
+    int64_t newStart = static_cast<int64_t>(cursorUs) - static_cast<int64_t>(newHalfSpan * 2.0 * cursorFrac);
+    int64_t newEnd = newStart + static_cast<int64_t>(newHalfSpan * 2.0);
+
+    // Clamp to [traceStart, traceEnd]
+    if (newStart < static_cast<int64_t>(traceStart)) {
+        newEnd += static_cast<int64_t>(traceStart) - newStart;
+        newStart = static_cast<int64_t>(traceStart);
+    }
+    if (newEnd > static_cast<int64_t>(traceEnd)) {
+        newStart -= newEnd - static_cast<int64_t>(traceEnd);
+        newEnd = static_cast<int64_t>(traceEnd);
+    }
+    newStart = std::max(newStart, static_cast<int64_t>(traceStart));
+    newEnd = std::min(newEnd, static_cast<int64_t>(traceEnd));
+
+    // Enforce minimum window
+    if (static_cast<uint64_t>(newEnd - newStart) < kMinWindowUs) {
+        const int64_t centre = (newStart + newEnd) / 2;
+        newStart = centre - static_cast<int64_t>(kMinWindowUs / 2);
+        newEnd = centre + static_cast<int64_t>(kMinWindowUs / 2);
+        newStart = std::max(newStart, static_cast<int64_t>(traceStart));
+        newEnd = std::min(newEnd, static_cast<int64_t>(traceEnd));
+    }
+
+    m_visibleStartUs = static_cast<uint64_t>(newStart);
+    m_visibleEndUs = static_cast<uint64_t>(newEnd);
+
+    // Immediate feedback: subsample existing full-trace bins
+    applySubsampledView();
+
+    // Arm debounce for high-resolution re-fetch
+    m_zoomDebounceTimer->start();
+
+    emit visibleWindowChanged(m_visibleStartUs, m_visibleEndUs);
+    event->accept();
+}
+
+void TimelineWidget::setVisibleWindow(uint64_t startUs, uint64_t endUs)
+{
+    if (!m_analyzer) {
+        return;
+    }
+    const auto& hist = m_analyzer->histogram();
+    m_visibleStartUs = startUs;
+    m_visibleEndUs = endUs;
+    // Snap back to full trace if the window covers it entirely
+    if (m_visibleStartUs <= hist.traceStartUs && m_visibleEndUs >= hist.traceEndUs) {
+        m_visibleStartUs = 0;
+        m_visibleEndUs = 0;
+    }
+    applySubsampledView();
+    m_zoomDebounceTimer->start();
+    emit visibleWindowChanged(m_visibleStartUs, m_visibleEndUs);
+}
+
+// ---------------------------------------------------------------------------
+// Painting
+// ---------------------------------------------------------------------------
+
 void TimelineWidget::paintLanesWidget(QPainter& p, QRect rect)
 {
     p.fillRect(rect, QColor(30, 30, 30));
@@ -185,6 +307,22 @@ void TimelineWidget::paintLanesWidget(QPainter& p, QRect rect)
         p.setPen(QColor(120, 120, 120));
         p.drawText(rect, Qt::AlignCenter, "No signals added. Click '+ Signal' to add one.");
         return;
+    }
+
+    // Draw time axis labels when zoomed
+    if (m_analyzer && (m_visibleStartUs != 0 || m_visibleEndUs != 0)) {
+        const uint64_t winStart = m_visibleStartUs;
+        const uint64_t winEnd = m_visibleEndUs;
+        constexpr int kLabelWidth = 120;
+        const int plotW = rect.width() - kLabelWidth;
+        p.setPen(QColor(90, 90, 90));
+        const int numLabels = 4;
+        for (int i = 0; i <= numLabels; ++i) {
+            uint64_t ts = winStart + (winEnd - winStart) * i / numLabels;
+            int x = kLabelWidth + plotW * i / numLabels;
+            QString label = QString::number(static_cast<double>(ts) / 1e6, 'f', 3) + "s";
+            p.drawText(x - 25, 0, 50, 12, Qt::AlignCenter, label);
+        }
     }
 
     for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
@@ -264,29 +402,77 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
 
         float x = float(plotRect.left()) + static_cast<float>(static_cast<int64_t>(i) * (float)plotW / (float)numBins);
 
-        int yMax
-            = plotBottom - static_cast<int>(static_cast<int64_t>(bin.maxRaw) * plotH / static_cast<int64_t>(maxVal));
-        int yMin
-            = plotBottom - static_cast<int>(static_cast<int64_t>(bin.minRaw) * plotH / static_cast<int64_t>(maxVal));
-        yMax = std::max(plotRect.top(), std::min(yMax, plotBottom));
-        yMin = std::max(plotRect.top(), std::min(yMin, plotBottom));
-
-        p.setPen(dotColor);
-        // p.drawPoint(x, yMax);
-        // TODO: use drawRects for performance
-        // p.drawRect(x, yMin, x + plotW/numBins, yMax);
-        // int xx = plotRect.x(), yy = plotRect.y(), ww=plotRect.width(), hh=plotRect.height();
         float xx = x;
         float hh = float(plotRect.height()) * (float(bin.maxRaw - bin.minRaw)) / float(lane.maxRaw);
         float yy = plotBottom - hh;
         float ww = float(plotRect.width()) / float(numBins);
+        p.setPen(dotColor);
         p.drawRect(xx, yy, ww, hh);
-        // spdlog::info("xx:{} yy:{} ww:{} hh:{}", xx, yy, ww, hh);
-        // p.fillRect(xx+5, yy+5, ww - 10, hh - 10, dotColor);
-        // p.fillRect(x, yMin, x + plotW/numBins, yMax, dotColor);
-        // if (yMax != yMin) {
-        //     p.drawPoint(x, yMin);
-        // }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+std::pair<uint64_t, uint64_t> TimelineWidget::effectiveWindow() const
+{
+    if (!m_analyzer) {
+        return { 0, 0 };
+    }
+    if (m_visibleStartUs == 0 && m_visibleEndUs == 0) {
+        const auto& hist = m_analyzer->histogram();
+        return { hist.traceStartUs, hist.traceEndUs };
+    }
+    return { m_visibleStartUs, m_visibleEndUs };
+}
+
+void TimelineWidget::computeLaneStats(SignalLane& lane)
+{
+    lane.minRaw = 0;
+    lane.maxRaw = 0;
+    for (auto& bin : lane.bins) {
+        lane.minRaw = std::min(bin.minRaw, lane.minRaw);
+        lane.maxRaw = std::max(bin.maxRaw, lane.maxRaw);
+    }
+}
+
+/// Subsample the full-trace bins into lane.bins for immediate zoomed display.
+/// Only bins whose timestamps fall inside the visible window are kept.
+void TimelineWidget::applySubsampledView()
+{
+    if (!m_analyzer) {
+        return;
+    }
+    auto [winStart, winEnd] = effectiveWindow();
+    if (winEnd <= winStart) {
+        return;
+    }
+
+    for (auto& lane : m_lanes) {
+        if (lane.loading || lane.fullTraceBins.empty()) {
+            continue;
+        }
+
+        // Determine which full-trace bins fall inside the window
+        std::vector<fastrace::SignalBin> visible;
+        visible.reserve(lane.fullTraceBins.size());
+        for (const auto& bin : lane.fullTraceBins) {
+            if (bin.timestampUs >= winStart && bin.timestampUs < winEnd) {
+                visible.push_back(bin);
+            }
+        }
+        if (visible.empty()) {
+            // Fall back to all bins so the lane isn't blank while zoomed in
+            lane.bins = lane.fullTraceBins;
+        } else {
+            lane.bins = std::move(visible);
+        }
+        computeLaneStats(lane);
+    }
+
+    if (m_signalLanesWidget) {
+        m_signalLanesWidget->update();
     }
 }
 
@@ -329,7 +515,6 @@ void TimelineWidget::addSignalLane(const QString& name)
     lane.bitLength = bitLength;
     lane.watcher = new QFutureWatcher<void>(this);
 
-    int laneIdx = static_cast<int>(m_lanes.size()) - 1;
     auto* w = lane.watcher;
     connect(lane.watcher, &QFutureWatcher<void>::finished, this, [this, w]() {
         for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
@@ -340,7 +525,7 @@ void TimelineWidget::addSignalLane(const QString& name)
         }
     });
 
-    startSignalJob(laneIdx);
+    startSignalJob(static_cast<int>(m_lanes.size()) - 1);
 
     m_signalLanesWidget->setFixedHeight(static_cast<int>(m_lanes.size()) * 40);
 }
@@ -367,7 +552,6 @@ void TimelineWidget::onBtnAddSignalClicked()
             }
         }
     }
-    // signalNames.removeDuplicates();
     signalNames.sort();
 
     if (signalNames.isEmpty()) {
@@ -415,6 +599,12 @@ void TimelineWidget::onBtnAddSignalClicked()
     emit signalsChanged(currentSignalNames());
 }
 
+// ---------------------------------------------------------------------------
+// Background jobs
+// ---------------------------------------------------------------------------
+
+/// Full-trace job — always fetches bins for the whole trace and caches them
+/// in fullTraceBins so applySubsampledView() can work without hitting disk.
 void TimelineWidget::startSignalJob(int laneIdx)
 {
     const int laneWidth = 5;
@@ -442,6 +632,48 @@ void TimelineWidget::startSignalJob(int laneIdx)
     m_signalLanesWidget->update();
 }
 
+/// Range job — fetches high-resolution bins for [m_visibleStartUs, m_visibleEndUs].
+/// Called by the zoom debounce timer.
+void TimelineWidget::startRangeJob(int laneIdx)
+{
+    const int laneWidth = 5;
+    if (!m_analyzer || laneIdx < 0 || laneIdx >= static_cast<int>(m_lanes.size())) {
+        return;
+    }
+
+    auto [winStart, winEnd] = effectiveWindow();
+    if (winEnd <= winStart) {
+        return;
+    }
+
+    m_analyzer->histogramCancelled.store(false, std::memory_order_relaxed);
+    m_analyzer->histogramChunksProcessed.store(0, std::memory_order_relaxed);
+
+    auto& lane = m_lanes[laneIdx];
+    lane.loading = true;
+
+    int numBins = std::max(1, m_signalLanesWidget ? m_signalLanesWidget->width() / laneWidth : 200);
+
+    auto pendingBins = std::make_shared<std::vector<fastrace::SignalBin>>(numBins);
+    lane.pendingBins = pendingBins;
+
+    std::string name = lane.iSignalName;
+    auto future = QtConcurrent::run([analyzer = m_analyzer, name, numBins, pendingBins, winStart, winEnd]() mutable {
+        analyzer->buildSignalTimeSeriesRange(name, numBins, *pendingBins, winStart, winEnd);
+    });
+    lane.watcher->setFuture(future);
+    m_repaintTimer->start();
+    m_signalLanesWidget->update();
+}
+
+void TimelineWidget::onZoomDebounceTimeout()
+{
+    // Launch a high-resolution re-fetch for all lanes using the current window.
+    for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
+        startRangeJob(i);
+    }
+}
+
 void TimelineWidget::onSignalJobFinished(int laneIdx)
 {
     if (laneIdx < 0 || laneIdx >= static_cast<int>(m_lanes.size())) {
@@ -451,16 +683,16 @@ void TimelineWidget::onSignalJobFinished(int laneIdx)
     if (lane.pendingBins) {
         lane.bins = std::move(*lane.pendingBins);
         lane.pendingBins.reset();
+
+        // Cache full-trace bins only when we just did a full-trace job (i.e.,
+        // no zoom window is set).  Range jobs should not overwrite the cache.
+        if (m_visibleStartUs == 0 && m_visibleEndUs == 0) {
+            lane.fullTraceBins = lane.bins;
+        }
     }
     lane.loading = false;
 
-    lane.minRaw = 0;
-    lane.maxRaw = 0;
-
-    for (auto& bin : lane.bins) {
-        lane.minRaw = std::min(bin.minRaw, lane.minRaw);
-        lane.maxRaw = std::max(bin.maxRaw, lane.maxRaw);
-    }
+    computeLaneStats(lane);
 
     // Stop repaint timer if no lanes are still loading
     bool anyLoading = false;
