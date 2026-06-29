@@ -134,8 +134,9 @@ int main(int argc, char* argv[])
     const double sizeMegabytes = static_cast<double>(sizeBytes) / (1024.0 * 1024.0);
 
     // --- BLF processing ---
-    // TODO: we want to drop caches only when measuring performance
-    dropFileCache(filename);
+    if (runBenchmark) {
+        dropFileCache(filename);
+    }
 
     auto procStartTs = std::chrono::high_resolution_clock::now();
     analyzer.processFile(filename);
