@@ -252,16 +252,16 @@ void TimelineWidget::handleLanesWheel(QWheelEvent* event)
         newStart -= newEnd - static_cast<int64_t>(traceEnd);
         newEnd = static_cast<int64_t>(traceEnd);
     }
-    newStart = std::max(newStart, static_cast<int64_t>(traceStart));
-    newEnd = std::min(newEnd, static_cast<int64_t>(traceEnd));
+    newStart = (std::max)(newStart, static_cast<int64_t>(traceStart));
+    newEnd = (std::min)(newEnd, static_cast<int64_t>(traceEnd));
 
     // Enforce minimum window
     if (static_cast<uint64_t>(newEnd - newStart) < kMinWindowUs) {
         const int64_t centre = (newStart + newEnd) / 2;
         newStart = centre - static_cast<int64_t>(kMinWindowUs / 2);
         newEnd = centre + static_cast<int64_t>(kMinWindowUs / 2);
-        newStart = std::max(newStart, static_cast<int64_t>(traceStart));
-        newEnd = std::min(newEnd, static_cast<int64_t>(traceEnd));
+        newStart = (std::max)(newStart, static_cast<int64_t>(traceStart));
+        newEnd = (std::min)(newEnd, static_cast<int64_t>(traceEnd));
     }
 
     m_visibleStartUs = static_cast<uint64_t>(newStart);
@@ -433,8 +433,8 @@ void TimelineWidget::computeLaneStats(SignalLane& lane)
     lane.minRaw = 0;
     lane.maxRaw = 0;
     for (auto& bin : lane.bins) {
-        lane.minRaw = std::min(bin.minRaw, lane.minRaw);
-        lane.maxRaw = std::max(bin.maxRaw, lane.maxRaw);
+        lane.minRaw = (std::min)(bin.minRaw, lane.minRaw);
+        lane.maxRaw = (std::max)(bin.maxRaw, lane.maxRaw);
     }
 }
 
@@ -619,7 +619,7 @@ void TimelineWidget::startSignalJob(int laneIdx)
     auto& lane = m_lanes[laneIdx];
     lane.loading = true;
 
-    int numBins = std::max(1, m_signalLanesWidget ? m_signalLanesWidget->width() / laneWidth : 200);
+    int numBins = (std::max)(1, m_signalLanesWidget ? m_signalLanesWidget->width() / laneWidth : 200);
 
     auto pendingBins = std::make_shared<std::vector<fastrace::SignalBin>>(numBins);
     lane.pendingBins = pendingBins;
@@ -653,7 +653,7 @@ void TimelineWidget::startRangeJob(int laneIdx)
     auto& lane = m_lanes[laneIdx];
     lane.loading = true;
 
-    int numBins = std::max(1, m_signalLanesWidget ? m_signalLanesWidget->width() / laneWidth : 200);
+    int numBins = (std::max)(1, m_signalLanesWidget ? m_signalLanesWidget->width() / laneWidth : 200);
 
     auto pendingBins = std::make_shared<std::vector<fastrace::SignalBin>>(numBins);
     lane.pendingBins = pendingBins;
