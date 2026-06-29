@@ -1,8 +1,9 @@
 #include "SignalDecoder.h"
+#include "BlfTypes.h"
 
 namespace fastrace {
 
-uint64_t extractSignalRaw(const uint8_t* data, uint8_t dataLen, uint32_t startBit, uint32_t bitLength, bool isBigEndian)
+uint64_t extractSignalRaw(const uint8_t* data, size_t dataLen, uint32_t startBit, uint32_t bitLength, bool isBigEndian)
 {
     if (bitLength == 0 || bitLength > 64) {
         return 0;
@@ -42,21 +43,44 @@ uint64_t extractSignalRaw(const uint8_t* data, uint8_t dataLen, uint32_t startBi
 
 std::vector<DecodedSignal> decodeAllSignals(const ArDatabase& db, const TraceMessage& msg)
 {
-    auto it = db.messageByCanId.find(msg.arbId);
-    if (it == db.messageByCanId.end()) {
-        return {};
-    }
-    const auto& arMsg = db.messages[it->second];
     std::vector<DecodedSignal> result;
-    result.reserve(arMsg.signalDefs.size());
-    for (const auto& sig : arMsg.signalDefs) {
-        DecodedSignal ds;
-        ds.name = sig.name;
-        ds.bitLength = sig.bitLength;
-        ds.startBit = sig.startBit;
-        ds.isBigEndian = sig.isBigEndian;
-        ds.rawValue = extractSignalRaw(msg.data, msg.dataLen, sig.startBit, sig.bitLength, sig.isBigEndian);
-        result.push_back(std::move(ds));
+    if (msg.objectType == ETHERNET_FRAME || msg.objectType == ETHERNET_FRAME_EX
+        || msg.objectType == ETHERNET_FRAME_FORWARDED) {
+        for (const auto& arMsg : db.messages) {
+            if (arMsg.busType == ArBusType::ETHERNET && arMsg.dstIp == msg.dstIp
+                && (arMsg.dstPort == 0 || arMsg.dstPort == msg.dstPort)) {
+                auto it = msg.pdus.find(arMsg.pduId);
+                if (it != msg.pdus.end()) {
+                    size_t pduOffset = it->second.offset;
+                    for (const auto& sig : arMsg.signalDefs) {
+                        DecodedSignal ds;
+                        ds.name = sig.name;
+                        ds.bitLength = sig.bitLength;
+                        ds.startBit = sig.startBit;
+                        ds.isBigEndian = sig.isBigEndian;
+                        ds.rawValue = extractSignalRaw(msg.data.data() + pduOffset, msg.data.size() - pduOffset,
+                            sig.startBit, sig.bitLength, sig.isBigEndian);
+                        result.push_back(std::move(ds));
+                    }
+                }
+            }
+        }
+    } else {
+        auto it = db.messageByCanId.find(msg.arbId);
+        if (it != db.messageByCanId.end()) {
+            const auto& arMsg = db.messages[it->second];
+            result.reserve(arMsg.signalDefs.size());
+            for (const auto& sig : arMsg.signalDefs) {
+                DecodedSignal ds;
+                ds.name = sig.name;
+                ds.bitLength = sig.bitLength;
+                ds.startBit = sig.startBit;
+                ds.isBigEndian = sig.isBigEndian;
+                ds.rawValue
+                    = extractSignalRaw(msg.data.data(), msg.data.size(), sig.startBit, sig.bitLength, sig.isBigEndian);
+                result.push_back(std::move(ds));
+            }
+        }
     }
     return result;
 }

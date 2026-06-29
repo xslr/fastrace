@@ -23,6 +23,11 @@ struct ArMessage {
     std::string cluster;
     ArBusType busType = ArBusType::CAN;
     std::vector<ArSignal> signalDefs;
+
+    // Ethernet specific fields
+    uint32_t pduId = 0;
+    std::string dstIp;
+    uint16_t dstPort = 0;
 };
 
 struct ArSomeIpService {

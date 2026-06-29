@@ -111,6 +111,84 @@ static std::string fmtIPv6(const uint8_t addr[16])
         addr[12], addr[13], addr[14], addr[15]);
 }
 
+static bool extractUdpInfo(const char* frame, size_t frameLen, std::string& dstIpOut, uint16_t& dstPortOut,
+    const char*& payloadOut, size_t& payloadLenOut)
+{
+    if (frameLen < sizeof(EthernetWireHeader)) {
+        return false;
+    }
+    const auto* eth = reinterpret_cast<const EthernetWireHeader*>(frame);
+    size_t offset = sizeof(EthernetWireHeader);
+    uint16_t etherType = beToHost16(eth->etherType);
+    if ((etherType == 0x8100u || etherType == 0x88A8u) && frameLen >= offset + 4) {
+        uint16_t inner;
+        std::memcpy(&inner, frame + offset + 2, 2);
+        etherType = beToHost16(inner);
+        offset += 4;
+    }
+    if (etherType == 0x0800u) {
+        if (frameLen < offset + sizeof(IPv4Header)) {
+            return false;
+        }
+        const auto* ip = reinterpret_cast<const IPv4Header*>(frame + offset);
+        const size_t ihlBytes = static_cast<size_t>(ip->versionIHL & 0x0Fu) * 4u;
+        if (ihlBytes < 20u || frameLen < offset + ihlBytes) {
+            return false;
+        }
+        offset += ihlBytes;
+        if (ip->protocol == 17u && frameLen >= offset + sizeof(UDPHeader)) {
+            const auto* udp = reinterpret_cast<const UDPHeader*>(frame + offset);
+            dstIpOut = std::format("{}.{}.{}.{}", ip->dstIP[0], ip->dstIP[1], ip->dstIP[2], ip->dstIP[3]);
+            dstPortOut = beToHost16(udp->dstPort);
+            payloadOut = frame + offset + sizeof(UDPHeader);
+            uint16_t udpLen = beToHost16(udp->length);
+            payloadLenOut = udpLen > 8u ? udpLen - 8u : 0u;
+            if (payloadLenOut > frameLen - offset - sizeof(UDPHeader)) {
+                payloadLenOut = frameLen - offset - sizeof(UDPHeader);
+            }
+            return true;
+        }
+    } else if (etherType == 0x86DDu) {
+        if (frameLen < offset + sizeof(IPv6Header)) {
+            return false;
+        }
+        const auto* ip6 = reinterpret_cast<const IPv6Header*>(frame + offset);
+        dstIpOut = fmtIPv6(ip6->dstAddr);
+        offset += sizeof(IPv6Header);
+        uint8_t nextHdr = ip6->nextHeader;
+        while (nextHdr == 0u || nextHdr == 43u || nextHdr == 60u) {
+            if (frameLen < offset + 2) {
+                return false;
+            }
+            const uint8_t extLen = static_cast<uint8_t>(frame[offset + 1]);
+            nextHdr = static_cast<uint8_t>(frame[offset]);
+            offset += static_cast<size_t>(extLen + 1) * 8u;
+            if (frameLen < offset) {
+                return false;
+            }
+        }
+        if (nextHdr == 44u) {
+            if (frameLen < offset + 8) {
+                return false;
+            }
+            nextHdr = static_cast<uint8_t>(frame[offset]);
+            offset += 8u;
+        }
+        if (nextHdr == 17u && frameLen >= offset + sizeof(UDPHeader)) {
+            const auto* udp = reinterpret_cast<const UDPHeader*>(frame + offset);
+            dstPortOut = beToHost16(udp->dstPort);
+            payloadOut = frame + offset + sizeof(UDPHeader);
+            uint16_t udpLen = beToHost16(udp->length);
+            payloadLenOut = udpLen > 8u ? udpLen - 8u : 0u;
+            if (payloadLenOut > frameLen - offset - sizeof(UDPHeader)) {
+                payloadLenOut = frameLen - offset - sizeof(UDPHeader);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 // Decode and log TCP/UDP from a raw Ethernet wire frame (dst MAC first).
 static void parseTransport(const char* frame, size_t frameLen)
 {
@@ -378,8 +456,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
                 tm.extendedId = ext;
                 tm.dlc = msg.dlc;
-                tm.dataLen = (std::min)(msg.dlc, static_cast<uint8_t>(8));
-                std::memcpy(tm.data, msg.data, tm.dataLen);
+                size_t dlen = (std::min)(msg.dlc, static_cast<uint8_t>(8));
+                tm.data.assign(msg.data, msg.data + dlen);
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
                     self->messages.push_back(std::move(tm));
@@ -421,8 +499,34 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.objectType = base.objectType;
                 tm.channel = eth.channel;
                 tm.dlc = 0;
-                tm.dataLen = static_cast<uint8_t>((std::min)(frameLen, static_cast<size_t>(64)));
-                std::memcpy(tm.data, frameData, tm.dataLen);
+                std::string dstIp;
+                uint16_t dstPort = 0;
+                const char* udpPayload = nullptr;
+                size_t udpPayloadLen = 0;
+                if (extractUdpInfo(frameData, frameLen, dstIp, dstPort, udpPayload, udpPayloadLen)) {
+                    tm.dstIp = std::move(dstIp);
+                    tm.dstPort = dstPort;
+                    tm.data.assign(udpPayload, udpPayload + udpPayloadLen);
+                    size_t pOffset = 0;
+                    while (pOffset + 8 <= udpPayloadLen) {
+                        uint32_t pduId = (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset])) << 24)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 1])) << 16)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 2])) << 8)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 3])));
+                        uint32_t pduLen = (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 4])) << 24)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 5])) << 16)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 6])) << 8)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 7])));
+                        pOffset += 8;
+                        if (pOffset + pduLen > udpPayloadLen) {
+                            break;
+                        }
+                        tm.pdus[pduId] = PduIndex { static_cast<uint16_t>(pOffset), static_cast<uint16_t>(pduLen) };
+                        pOffset += pduLen;
+                    }
+                } else {
+                    tm.data.assign(frameData, frameData + (std::min)(frameLen, size_t { 64 }));
+                }
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
                     self->messages.push_back(std::move(tm));
@@ -472,8 +576,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
                 tm.extendedId = ext;
                 tm.dlc = msg.dlc;
-                tm.dataLen = static_cast<uint8_t>(dlen);
-                std::memcpy(tm.data, dataPtr, dlen);
+                tm.data.assign(dataPtr, dataPtr + dlen);
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
                     self->messages.push_back(std::move(tm));
@@ -529,9 +632,8 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
                 tm.extendedId = ext;
                 tm.dlc = msg.dlc;
-                tm.dataLen = static_cast<uint8_t>(dlen);
                 if (dlen > 0) {
-                    std::memcpy(tm.data, dataPtr, dlen);
+                    tm.data.assign(dataPtr, dataPtr + dlen);
                 }
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
@@ -573,8 +675,34 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.objectType = base.objectType;
                 tm.channel = eth.channel;
                 tm.dlc = 0;
-                tm.dataLen = static_cast<uint8_t>((std::min)(frameLen, size_t { 64 }));
-                std::memcpy(tm.data, frameData, tm.dataLen);
+                std::string dstIp;
+                uint16_t dstPort = 0;
+                const char* udpPayload = nullptr;
+                size_t udpPayloadLen = 0;
+                if (extractUdpInfo(frameData, frameLen, dstIp, dstPort, udpPayload, udpPayloadLen)) {
+                    tm.dstIp = std::move(dstIp);
+                    tm.dstPort = dstPort;
+                    tm.data.assign(udpPayload, udpPayload + udpPayloadLen);
+                    size_t pOffset = 0;
+                    while (pOffset + 8 <= udpPayloadLen) {
+                        uint32_t pduId = (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset])) << 24)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 1])) << 16)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 2])) << 8)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 3])));
+                        uint32_t pduLen = (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 4])) << 24)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 5])) << 16)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 6])) << 8)
+                            | (static_cast<uint32_t>(static_cast<uint8_t>(udpPayload[pOffset + 7])));
+                        pOffset += 8;
+                        if (pOffset + pduLen > udpPayloadLen) {
+                            break;
+                        }
+                        tm.pdus[pduId] = PduIndex { static_cast<uint16_t>(pOffset), static_cast<uint16_t>(pduLen) };
+                        pOffset += pduLen;
+                    }
+                } else {
+                    tm.data.assign(frameData, frameData + (std::min)(frameLen, size_t { 64 }));
+                }
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
                     self->messages.push_back(std::move(tm));
@@ -599,7 +727,6 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 tm.objectType = base.objectType;
                 tm.channel = 0;
                 tm.dlc = 0;
-                tm.dataLen = 0;
                 std::lock_guard<std::mutex> lk(self->messagesMu);
                 if (self->messages.size() < self->maxMessages) {
                     self->messages.push_back(std::move(tm));
@@ -1593,13 +1720,13 @@ void Analyzer::buildSignalTimeSeries(const std::string& iSignalName, int numBins
     }
 
     // Locate signal in arDatabase
-    uint32_t arbId = 0;
+    ArMessage sigMsg;
     ArSignal sigDef;
     bool found = false;
     for (const auto& msg : m_arDatabase_.messages) {
         for (const auto& sig : msg.signalDefs) {
             if (sig.name == iSignalName) {
-                arbId = msg.canId;
+                sigMsg = msg;
                 sigDef = sig;
                 found = true;
                 break;
@@ -1640,9 +1767,23 @@ void Analyzer::buildSignalTimeSeries(const std::string& iSignalName, int numBins
         }
         auto msgs = decodeChunk(ci);
         for (const auto& msg : msgs) {
-            if (msg.arbId == arbId) {
-                uint64_t raw
-                    = extractSignalRaw(msg.data, msg.dataLen, sigDef.startBit, sigDef.bitLength, sigDef.isBigEndian);
+            bool match = false;
+            size_t pduOffset = 0;
+            if (sigMsg.busType == ArBusType::CAN) {
+                match = (msg.arbId == sigMsg.canId);
+            } else if (sigMsg.busType == ArBusType::ETHERNET) {
+                if (msg.dstIp == sigMsg.dstIp && (sigMsg.dstPort == 0 || msg.dstPort == sigMsg.dstPort)) {
+                    auto it = msg.pdus.find(sigMsg.pduId);
+                    if (it != msg.pdus.end()) {
+                        match = true;
+                        pduOffset = it->second.offset;
+                    }
+                }
+            }
+
+            if (match) {
+                uint64_t raw = extractSignalRaw(msg.data.data() + pduOffset, msg.data.size() - pduOffset,
+                    sigDef.startBit, sigDef.bitLength, sigDef.isBigEndian);
                 uint64_t clampedTs = (std::max)(msg.timestampUs, traceStart);
                 size_t binIdx = (clampedTs - traceStart) / binWidth;
                 if (binIdx < static_cast<size_t>(numBins)) {
@@ -1673,13 +1814,13 @@ void Analyzer::buildSignalTimeSeriesRange(
     }
 
     // Locate signal in arDatabase
-    uint32_t arbId = 0;
+    ArMessage sigMsg;
     ArSignal sigDef;
     bool found = false;
     for (const auto& msg : m_arDatabase_.messages) {
         for (const auto& sig : msg.signalDefs) {
             if (sig.name == iSignalName) {
-                arbId = msg.canId;
+                sigMsg = msg;
                 sigDef = sig;
                 found = true;
                 break;
@@ -1727,24 +1868,38 @@ void Analyzer::buildSignalTimeSeriesRange(
         }
         auto msgs = decodeChunk(ci);
         for (const auto& msg : msgs) {
-            if (msg.arbId != arbId) {
-                continue;
-            }
             if (msg.timestampUs < rangeStart || msg.timestampUs >= rangeEnd) {
                 continue;
             }
-            uint64_t raw
-                = extractSignalRaw(msg.data, msg.dataLen, sigDef.startBit, sigDef.bitLength, sigDef.isBigEndian);
-            size_t binIdx = (msg.timestampUs - rangeStart) / binWidth;
-            if (binIdx < static_cast<size_t>(numBins)) {
-                auto& bin = out[binIdx];
-                if (!bin.hasData) {
-                    bin.minRaw = raw;
-                    bin.maxRaw = raw;
-                    bin.hasData = true;
-                } else {
-                    bin.minRaw = (std::min)(bin.minRaw, raw);
-                    bin.maxRaw = (std::max)(bin.maxRaw, raw);
+
+            bool match = false;
+            size_t pduOffset = 0;
+            if (sigMsg.busType == ArBusType::CAN) {
+                match = (msg.arbId == sigMsg.canId);
+            } else if (sigMsg.busType == ArBusType::ETHERNET) {
+                if (msg.dstIp == sigMsg.dstIp && (sigMsg.dstPort == 0 || msg.dstPort == sigMsg.dstPort)) {
+                    auto it = msg.pdus.find(sigMsg.pduId);
+                    if (it != msg.pdus.end()) {
+                        match = true;
+                        pduOffset = it->second.offset;
+                    }
+                }
+            }
+
+            if (match) {
+                uint64_t raw = extractSignalRaw(msg.data.data() + pduOffset, msg.data.size() - pduOffset,
+                    sigDef.startBit, sigDef.bitLength, sigDef.isBigEndian);
+                size_t binIdx = (msg.timestampUs - rangeStart) / binWidth;
+                if (binIdx < static_cast<size_t>(numBins)) {
+                    auto& bin = out[binIdx];
+                    if (!bin.hasData) {
+                        bin.minRaw = raw;
+                        bin.maxRaw = raw;
+                        bin.hasData = true;
+                    } else {
+                        bin.minRaw = (std::min)(bin.minRaw, raw);
+                        bin.maxRaw = (std::max)(bin.maxRaw, raw);
+                    }
                 }
             }
         }

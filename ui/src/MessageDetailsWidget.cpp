@@ -81,7 +81,7 @@ void MessageDetailsWidget::populateGeneralProps()
 void MessageDetailsWidget::updateFromMessage(const fastrace::TraceMessage& msg)
 {
     QString hexStr;
-    for (int i = 0; i < msg.dataLen; ++i) {
+    for (size_t i = 0; i < msg.data.size(); ++i) {
         if (i > 0) {
             if (i % 8 == 0) {
                 hexStr += "\n";

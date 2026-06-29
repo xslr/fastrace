@@ -20,8 +20,7 @@ struct DecodedSignal {
 // Intel (isBigEndian=false): startBit = LSB bit position.
 // Motorola (isBigEndian=true): startBit = MSB bit position.
 // Returns 0 if startBit/bitLength exceed dataLen.
-uint64_t extractSignalRaw(
-    const uint8_t* data, uint8_t dataLen, uint32_t startBit, uint32_t bitLength, bool isBigEndian);
+uint64_t extractSignalRaw(const uint8_t* data, size_t dataLen, uint32_t startBit, uint32_t bitLength, bool isBigEndian);
 
 // Look up ArMessage for msg.arbId in db, decode all its signals.
 // Returns empty vector if no matching message or no signal definitions.

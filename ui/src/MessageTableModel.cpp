@@ -184,8 +184,8 @@ QVariant MessageTableModel::data(const QModelIndex& index, int role) const
             return QString::number(msg.dlc);
         case 5: {
             QString dataHex;
-            dataHex.reserve(msg.dataLen * 3);
-            for (int i = 0; i < msg.dataLen; ++i) {
+            dataHex.reserve(msg.data.size() * 3);
+            for (size_t i = 0; i < msg.data.size(); ++i) {
                 if (i > 0) {
                     dataHex += ' ';
                 }
@@ -194,7 +194,7 @@ QVariant MessageTableModel::data(const QModelIndex& index, int role) const
             return dataHex;
         }
         case 6:
-            return QString::number(msg.dataLen);
+            return QString::number(msg.data.size());
         case 7:
             return QString("CH%1").arg(msg.channel); // ECU
         }

@@ -52,6 +52,17 @@ namespace {
         std::string shortName;
         std::string pduRef;
         std::string channel;
+        std::string ptPath;
+    };
+
+    struct SocketAddressInfo {
+        std::string networkEndpointRef;
+        uint16_t portNumber = 0;
+    };
+
+    struct PduTriggerExtraInfo {
+        uint32_t pduId = 0;
+        std::string socketAddressRef;
     };
 
     struct IndexMaps {
@@ -62,9 +73,25 @@ namespace {
         std::vector<EthPtInfo> ethPduTriggers;
         std::vector<ArEcu> ecus;
         std::vector<ArSomeIpService> services;
+
+        std::unordered_map<std::string, std::string> networkEndpoints;
+        std::unordered_map<std::string, SocketAddressInfo> socketAddresses;
+        std::unordered_map<std::string, PduTriggerExtraInfo> pduTriggersExtra;
     };
 
     // ----------------------------------------------------------------------------
+
+    static std::string getArxmlPath(pugi::xml_node node)
+    {
+        std::string path;
+        for (pugi::xml_node n = node; n; n = n.parent()) {
+            pugi::xml_node sn = n.child("SHORT-NAME");
+            if (sn) {
+                path = std::string("/") + sn.text().get() + path;
+            }
+        }
+        return path;
+    }
 
     static void indexCanCluster(pugi::xml_node el, const char* clusterName, IndexMaps& maps)
     {
@@ -98,6 +125,7 @@ namespace {
                     info.shortName = cv(pt, "SHORT-NAME");
                     info.pduRef = pduRef.text().get();
                     info.channel = chanName;
+                    info.ptPath = getArxmlPath(pt);
                     maps.ethPduTriggers.push_back(std::move(info));
                 }
             }
@@ -186,6 +214,56 @@ namespace {
         }
     }
 
+    static void collectEthernetRouting(pugi::xml_node root, IndexMaps& maps)
+    {
+        for (auto n : root.select_nodes("//NETWORK-ENDPOINT")) {
+            pugi::xml_node ne = n.node();
+            std::string ip;
+            if (auto ipv4 = ne.select_node(".//IPV-4-ADDRESS").node()) {
+                ip = ipv4.text().get();
+            } else if (auto ipv6 = ne.select_node(".//IPV-6-ADDRESS").node()) {
+                ip = ipv6.text().get();
+            }
+            if (!ip.empty()) {
+                maps.networkEndpoints[getArxmlPath(ne)] = ip;
+            }
+        }
+        for (auto n : root.select_nodes("//SOCKET-ADDRESS")) {
+            pugi::xml_node sa = n.node();
+            SocketAddressInfo info;
+            if (auto neRef = sa.select_node(".//NETWORK-ENDPOINT-REF").node()) {
+                info.networkEndpointRef = neRef.text().get();
+            }
+            if (auto port = sa.select_node(".//PORT-NUMBER").node()) {
+                info.portNumber = static_cast<uint16_t>(parseU32(port.text().get()));
+            }
+            if (!info.networkEndpointRef.empty()) {
+                maps.socketAddresses[getArxmlPath(sa)] = info;
+            }
+        }
+        for (auto n : root.select_nodes("//SOCKET-CONNECTION")) {
+            pugi::xml_node sc = n.node();
+            std::string clientPortRef;
+            if (auto cpr = sc.child("CLIENT-PORT-REF")) {
+                clientPortRef = cpr.text().get();
+            } else {
+                continue;
+            }
+            for (auto pduIdNode : sc.select_nodes(".//SOCKET-CONNECTION-IPDU-IDENTIFIER")) {
+                pugi::xml_node idNode = pduIdNode.node();
+                PduTriggerExtraInfo info;
+                info.socketAddressRef = clientPortRef;
+                if (auto hdr = idNode.child("HEADER-ID")) {
+                    info.pduId = parseU32(hdr.text().get());
+                }
+                if (auto ptRef = idNode.child("PDU-TRIGGERING-REF")) {
+                    std::string ref = ptRef.text().get();
+                    maps.pduTriggersExtra[ref] = info;
+                }
+            }
+        }
+    }
+
     static ArDatabase buildDatabase(IndexMaps& maps)
     {
         ArDatabase db;
@@ -240,6 +318,19 @@ namespace {
             msg.cluster = pt.channel;
             msg.busType = ArBusType::ETHERNET;
 
+            auto extIt = maps.pduTriggersExtra.find(pt.ptPath);
+            if (extIt != maps.pduTriggersExtra.end()) {
+                msg.pduId = extIt->second.pduId;
+                auto saIt = maps.socketAddresses.find(extIt->second.socketAddressRef);
+                if (saIt != maps.socketAddresses.end()) {
+                    msg.dstPort = saIt->second.portNumber;
+                    auto neIt = maps.networkEndpoints.find(saIt->second.networkEndpointRef);
+                    if (neIt != maps.networkEndpoints.end()) {
+                        msg.dstIp = neIt->second;
+                    }
+                }
+            }
+
             auto pduIt = maps.iPdus.find(pt.pduRef);
             if (pduIt == maps.iPdus.end()) {
                 db.messages.push_back(std::move(msg));
@@ -284,6 +375,7 @@ ArDatabase ArxmlParser::parseFile(const std::string& path)
         indexPackage(pkg, "", maps);
     }
     collectServices(autosar, maps);
+    collectEthernetRouting(autosar, maps);
 
     spdlog::info("ArxmlParser: '{}' → {} signals, {} PDUs, {} CAN triggers, {} "
                  "ETH triggers, {} ECUs, {} services",
