@@ -17,4 +17,4 @@ out/
 .idea/
 *.log
 .env*
-
+.qtcreator
