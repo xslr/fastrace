@@ -1,5 +1,9 @@
-#pragma once
+#include "Detection.h"
 #include <QWidget>
+#include <vector>
+
+class DetectionTableModel;
+class DetectionFilterProxyModel;
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -12,11 +16,16 @@ class DetectionsWidget : public QWidget {
 public:
     explicit DetectionsWidget(QWidget* parent = nullptr);
     ~DetectionsWidget() override;
+    void setDetections(const std::vector<Detection>& detections);
+
+signals:
+    void detectionSelected(size_t messageIndex);
 
 private:
     Ui::DetectionsWidget* ui;
+    DetectionTableModel* m_model;
+    DetectionFilterProxyModel* m_proxyModel;
 
-    void populateDetections();
     void populateStatistics();
     void setupTimelineBar();
 };

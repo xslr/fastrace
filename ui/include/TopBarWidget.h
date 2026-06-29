@@ -23,6 +23,10 @@ public:
     void setTraceComboEnabled(bool enabled);
     void setDbLoadProgress(float fraction);
 
+    void setDetectionProgress(int chunksProcessed, int totalChunks);
+    void setDetectionRunning(bool running);
+    bool isContinuousDetectionEnabled() const;
+
 signals:
     void playToggled(bool playing);
     void speedChanged(const QString& speed);
@@ -30,6 +34,10 @@ signals:
     /** Emitted whenever the user clicks Overview or Notebook. */
     void modeChanged(TopBarWidget::ViewMode mode);
     void databaseSelectionChanged(const QString& path);
+
+    void runDetectorsRequested();
+    void cancelDetectionRequested();
+    void continuousDetectionToggled(bool enabled);
 
 private slots:
     void onComboActivated(int index);

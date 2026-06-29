@@ -94,4 +94,34 @@ struct IPv6Header {
 };
 static_assert(sizeof(IPv6Header) == 40);
 
+// SOME/IP header (16 bytes).
+struct SomeIpWireHeader {
+    uint16_t serviceId; // big-endian
+    uint16_t methodId; // big-endian
+    uint32_t length; // big-endian
+    uint16_t clientId; // big-endian
+    uint16_t sessionId; // big-endian
+    uint8_t protocolVersion;
+    uint8_t interfaceVersion;
+    uint8_t messageType;
+    uint8_t returnCode;
+};
+static_assert(sizeof(SomeIpWireHeader) == 16);
+
+// DoIP header (8 bytes).
+struct DoipWireHeader {
+    uint8_t protocolVersion;
+    uint8_t inverseVersion;
+    uint16_t payloadType; // big-endian
+    uint32_t payloadLength; // big-endian
+};
+static_assert(sizeof(DoipWireHeader) == 8);
+
+// DoIP diagnostic sub-header (4 bytes).
+struct DoipDiagSubHeader {
+    uint16_t sourceAddress; // big-endian
+    uint16_t targetAddress; // big-endian
+};
+static_assert(sizeof(DoipDiagSubHeader) == 4);
+
 #pragma pack(pop)

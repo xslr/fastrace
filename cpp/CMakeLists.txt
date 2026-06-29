@@ -68,8 +68,16 @@ add_library(fastrace_analyzer STATIC
   src/RecentFiles.cpp
   src/SignalDecoder.cpp
   src/ArxmlParser.cpp
+  src/DetectionEngine.cpp
+  src/ProtocolParser.cpp
+  detectors/PduDetector.cpp
+  detectors/SomeIpSdDetector.cpp
+  detectors/DoipDetector.cpp
 )
-target_include_directories(fastrace_analyzer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(fastrace_analyzer PUBLIC 
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/include/detectors
+)
 target_link_libraries(fastrace_analyzer PUBLIC libdeflate_static spdlog::spdlog sqlite3_amalg pugixml::pugixml)
 
 # Executable

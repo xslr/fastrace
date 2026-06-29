@@ -51,6 +51,10 @@ TopBarWidget::TopBarWidget(QWidget* parent)
     connect(ui->btnOverview, &QPushButton::clicked, this, &TopBarWidget::onOverviewClicked);
     connect(ui->btnNotebook, &QPushButton::clicked, this, &TopBarWidget::onNotebookClicked);
 
+    connect(ui->btnRunDetectors, &QPushButton::clicked, this, &TopBarWidget::runDetectorsRequested);
+    connect(ui->btnCancelDetection, &QPushButton::clicked, this, &TopBarWidget::cancelDetectionRequested);
+    connect(ui->chkContinuousDetection, &QCheckBox::toggled, this, &TopBarWidget::continuousDetectionToggled);
+
     populateTraceCombo();
     populateDbCombo();
 
@@ -112,6 +116,7 @@ void TopBarWidget::openTrace(const QString& path)
         }
     }
 
+    ui->btnRunDetectors->setEnabled(true);
     emit traceFileChanged(path);
 }
 
@@ -203,6 +208,22 @@ void TopBarWidget::setDbLoadProgress(float fraction)
     ui->dbLoadProgress->setValue(static_cast<int>(fraction * 100));
     ui->dbLoadProgress->setVisible(fraction < 1.0f);
 }
+
+void TopBarWidget::setDetectionProgress(int chunksProcessed, int totalChunks)
+{
+    if (totalChunks > 0) {
+        ui->lblDetectionProgress->setText(QString("Detecting: %1 / %2").arg(chunksProcessed).arg(totalChunks));
+    }
+}
+
+void TopBarWidget::setDetectionRunning(bool running)
+{
+    ui->btnRunDetectors->setEnabled(!running && ui->cmbTraceFile->currentIndex() > 0);
+    ui->lblDetectionProgress->setVisible(running);
+    ui->btnCancelDetection->setVisible(running);
+}
+
+bool TopBarWidget::isContinuousDetectionEnabled() const { return ui->chkContinuousDetection->isChecked(); }
 
 void TopBarWidget::updateModeButtons()
 {
