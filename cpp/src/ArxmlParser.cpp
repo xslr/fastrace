@@ -140,10 +140,14 @@ namespace {
         }
         const std::string path = parentPath + "/" + nameStr;
 
+        std::string elPath = path + "/";
+        const size_t basePathLen = elPath.length();
+
         for (auto el : pkg.child("ELEMENTS").children()) {
             const char* tag = el.name();
             const char* sn = cv(el, "SHORT-NAME");
-            const std::string elPath = path + "/" + sn;
+            elPath.resize(basePathLen);
+            elPath.append(sn);
 
             if (std::strcmp(tag, "I-SIGNAL") == 0) {
                 ISignalInfo info;
