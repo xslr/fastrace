@@ -54,6 +54,16 @@
       </widget>
      </item>
      <item>
+      <widget class="QPushButton" name="btnAutoFit">
+       <property name="text">
+        <string>⇕ Auto-fit</string>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
       <spacer name="headerSpacer">
        <property name="orientation">
         <enum>Qt::Orientation::Horizontal</enum>

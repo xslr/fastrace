@@ -58,6 +58,30 @@ static constexpr uint64_t kMinWindowUs = 1'000;
 static constexpr int kZoomDebounceMs = 200;
 
 // ---------------------------------------------------------------------------
+// TimeAxisWidget
+// ---------------------------------------------------------------------------
+class TimeAxisWidget : public QWidget {
+public:
+    explicit TimeAxisWidget(TimelineWidget* parent)
+        : QWidget(parent)
+        , m_timeline(parent)
+    {
+        setMinimumHeight(20);
+        setMaximumHeight(20);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter p(this);
+        m_timeline->paintTimeAxisWidget(p, rect());
+    }
+
+private:
+    TimelineWidget* m_timeline;
+};
+
+// ---------------------------------------------------------------------------
 // SignalLanesWidget — paints lane content inside the scroll area
 // ---------------------------------------------------------------------------
 class SignalLanesWidget : public QWidget {
@@ -92,6 +116,13 @@ protected:
         }
     }
 
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_timeline->handleLanesMouseRelease(event->pos());
+        }
+    }
+
     void wheelEvent(QWheelEvent* event) override { m_timeline->handleLanesWheel(event); }
 
 private:
@@ -114,6 +145,10 @@ TimelineWidget::TimelineWidget(QWidget* parent)
         btn->setObjectName("iconBtn");
     }
 
+    // Create the time axis widget and insert it above the scroll area
+    m_timeAxisWidget = new TimeAxisWidget(this);
+    ui->verticalLayout->insertWidget(1, m_timeAxisWidget);
+
     // Create the lanes widget and set it as the scroll area's content
     m_signalLanesWidget = new SignalLanesWidget(this);
     m_signalLanesWidget->setMinimumHeight(0);
@@ -134,6 +169,7 @@ TimelineWidget::TimelineWidget(QWidget* parent)
     connect(m_zoomDebounceTimer, &QTimer::timeout, this, &TimelineWidget::onZoomDebounceTimeout);
 
     connect(ui->btnAddSignal, &QPushButton::clicked, this, &TimelineWidget::onBtnAddSignalClicked);
+    connect(ui->btnAutoFit, &QPushButton::toggled, this, &TimelineWidget::onAutoFitToggled);
 }
 
 TimelineWidget::~TimelineWidget() { delete ui; }
@@ -154,25 +190,100 @@ void TimelineWidget::attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer
 
 void TimelineWidget::paintEvent(QPaintEvent* event) { QWidget::paintEvent(event); }
 
+void TimelineWidget::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    if (ui->btnAutoFit->isChecked()) {
+        updateLanesLayout();
+    }
+}
+
+void TimelineWidget::updateLanesLayout()
+{
+    if (m_lanes.empty() || !m_signalLanesWidget) {
+        return;
+    }
+
+    if (ui->btnAutoFit->isChecked()) {
+        int totalAvailableHeight = ui->signalScrollArea->viewport()->height();
+        int heightPerLane = std::max(40, totalAvailableHeight / static_cast<int>(m_lanes.size()));
+        for (auto& lane : m_lanes) {
+            lane.height = heightPerLane;
+        }
+    }
+
+    int totalHeight = 0;
+    for (const auto& lane : m_lanes) {
+        totalHeight += lane.height;
+    }
+    m_signalLanesWidget->setFixedHeight(totalHeight);
+    m_signalLanesWidget->update();
+}
+
+void TimelineWidget::onAutoFitToggled(bool checked)
+{
+    if (checked) {
+        updateLanesLayout();
+    }
+}
+
 void TimelineWidget::handleLanesMouseMove(QPoint pos)
 {
-    int laneIdx = pos.y() / 40;
-    if (laneIdx >= static_cast<int>(m_lanes.size())) {
-        laneIdx = -1;
+    if (m_dragResizeLaneIndex != -1) {
+        int dy = pos.y() - m_dragResizeStartY;
+        int newHeight = std::max(40, m_dragResizeStartHeight + dy);
+        if (newHeight != m_lanes[m_dragResizeLaneIndex].height) {
+            m_lanes[m_dragResizeLaneIndex].height = newHeight;
+            updateLanesLayout();
+        }
+        return;
     }
+
+    int laneIdx = -1;
+    int currentY = 0;
+    for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
+        if (pos.y() >= currentY && pos.y() < currentY + m_lanes[i].height) {
+            laneIdx = i;
+            break;
+        }
+        currentY += m_lanes[i].height;
+    }
+
     if (m_hoveredLaneIndex != laneIdx) {
         m_hoveredLaneIndex = laneIdx;
         if (m_signalLanesWidget) {
             m_signalLanesWidget->update();
         }
     }
+
+    // Check if near bottom border of any lane
+    const int resizeBorderWidth = 5;
+    currentY = 0;
+    bool nearBorder = false;
+    for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
+        currentY += m_lanes[i].height;
+        if (std::abs(pos.y() - currentY) <= resizeBorderWidth) {
+            nearBorder = true;
+            break;
+        }
+    }
+
+    if (nearBorder) {
+        m_signalLanesWidget->setCursor(Qt::SplitVCursor);
+    } else {
+        m_signalLanesWidget->unsetCursor();
+    }
 }
 
 void TimelineWidget::handleLanesLeave()
 {
+    if (m_dragResizeLaneIndex != -1) {
+        return;
+    }
     if (m_hoveredLaneIndex != -1) {
         m_hoveredLaneIndex = -1;
         if (m_signalLanesWidget) {
+            m_signalLanesWidget->unsetCursor();
             m_signalLanesWidget->update();
         }
     }
@@ -180,28 +291,57 @@ void TimelineWidget::handleLanesLeave()
 
 void TimelineWidget::handleLanesMousePress(QPoint pos)
 {
-    int laneIdx = pos.y() / 40;
+    int currentY = 0;
+    for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
+        currentY += m_lanes[i].height;
+        if (std::abs(pos.y() - currentY) <= 3) {
+            m_dragResizeLaneIndex = i;
+            m_dragResizeStartY = pos.y();
+            m_dragResizeStartHeight = m_lanes[i].height;
+            if (ui->btnAutoFit->isChecked()) {
+                ui->btnAutoFit->setChecked(false);
+            }
+            return;
+        }
+    }
+
+    int laneIdx = -1;
+    currentY = 0;
+    for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
+        if (pos.y() >= currentY && pos.y() < currentY + m_lanes[i].height) {
+            laneIdx = i;
+            break;
+        }
+        currentY += m_lanes[i].height;
+    }
+
     if (laneIdx >= 0 && laneIdx < static_cast<int>(m_lanes.size())) {
         constexpr int kLabelWidth = 120;
         constexpr int kBtnSize = 16;
         constexpr int kBtnMargin = 4;
 
-        QRect btnRect(kLabelWidth - kBtnMargin - kBtnSize, laneIdx * 40 + (40 - kBtnSize) / 2, kBtnSize, kBtnSize);
+        // Calculate lane start Y
+        int laneStartY = 0;
+        for (int i = 0; i < laneIdx; ++i) {
+            laneStartY += m_lanes[i].height;
+        }
+
+        QRect btnRect(kLabelWidth - kBtnMargin - kBtnSize, laneStartY + (m_lanes[laneIdx].height - kBtnSize) / 2,
+            kBtnSize, kBtnSize);
         if (btnRect.contains(pos)) {
             if (m_lanes[laneIdx].watcher) {
                 delete m_lanes[laneIdx].watcher;
             }
             m_lanes.erase(m_lanes.begin() + laneIdx);
 
-            if (m_signalLanesWidget) {
-                m_signalLanesWidget->setFixedHeight(static_cast<int>(m_lanes.size()) * 40);
-                m_hoveredLaneIndex = -1;
-                m_signalLanesWidget->update();
-            }
+            m_hoveredLaneIndex = -1;
+            updateLanesLayout();
             emit signalsChanged(currentSignalNames());
         }
     }
 }
+
+void TimelineWidget::handleLanesMouseRelease(QPoint) { m_dragResizeLaneIndex = -1; }
 
 void TimelineWidget::handleLanesWheel(QWheelEvent* event)
 {
@@ -273,6 +413,10 @@ void TimelineWidget::handleLanesWheel(QWheelEvent* event)
     // Arm debounce for high-resolution re-fetch
     m_zoomDebounceTimer->start();
 
+    if (m_timeAxisWidget) {
+        m_timeAxisWidget->update();
+    }
+
     emit visibleWindowChanged(m_visibleStartUs, m_visibleEndUs);
     event->accept();
 }
@@ -292,12 +436,37 @@ void TimelineWidget::setVisibleWindow(uint64_t startUs, uint64_t endUs)
     }
     applySubsampledView();
     m_zoomDebounceTimer->start();
+
+    if (m_timeAxisWidget) {
+        m_timeAxisWidget->update();
+    }
+
     emit visibleWindowChanged(m_visibleStartUs, m_visibleEndUs);
 }
 
 // ---------------------------------------------------------------------------
 // Painting
 // ---------------------------------------------------------------------------
+
+void TimelineWidget::paintTimeAxisWidget(QPainter& p, QRect rect)
+{
+    p.fillRect(rect, QColor(40, 40, 40));
+    if (!m_analyzer || (m_visibleStartUs == 0 && m_visibleEndUs == 0)) {
+        return;
+    }
+    const uint64_t winStart = m_visibleStartUs;
+    const uint64_t winEnd = m_visibleEndUs;
+    constexpr int kLabelWidth = 120;
+    const int plotW = rect.width() - kLabelWidth;
+    p.setPen(QColor(150, 150, 150));
+    const int numLabels = 4;
+    for (int i = 0; i <= numLabels; ++i) {
+        uint64_t ts = winStart + (winEnd - winStart) * i / numLabels;
+        int x = kLabelWidth + plotW * i / numLabels;
+        QString label = QString::number(static_cast<double>(ts) / 1e6, 'f', 3) + "s";
+        p.drawText(x - 25, 0, 50, rect.height(), Qt::AlignCenter, label);
+    }
+}
 
 void TimelineWidget::paintLanesWidget(QPainter& p, QRect rect)
 {
@@ -309,25 +478,11 @@ void TimelineWidget::paintLanesWidget(QPainter& p, QRect rect)
         return;
     }
 
-    // Draw time axis labels when zoomed
-    if (m_analyzer && (m_visibleStartUs != 0 || m_visibleEndUs != 0)) {
-        const uint64_t winStart = m_visibleStartUs;
-        const uint64_t winEnd = m_visibleEndUs;
-        constexpr int kLabelWidth = 120;
-        const int plotW = rect.width() - kLabelWidth;
-        p.setPen(QColor(90, 90, 90));
-        const int numLabels = 4;
-        for (int i = 0; i <= numLabels; ++i) {
-            uint64_t ts = winStart + (winEnd - winStart) * i / numLabels;
-            int x = kLabelWidth + plotW * i / numLabels;
-            QString label = QString::number(static_cast<double>(ts) / 1e6, 'f', 3) + "s";
-            p.drawText(x - 25, 0, 50, 12, Qt::AlignCenter, label);
-        }
-    }
-
+    int currentY = 0;
     for (int i = 0; i < static_cast<int>(m_lanes.size()); ++i) {
-        QRect laneRect(rect.left(), i * 40, rect.width(), 40);
+        QRect laneRect(rect.left(), currentY, rect.width(), m_lanes[i].height);
         paintLane(p, m_lanes[i], laneRect, i);
+        currentY += m_lanes[i].height;
     }
 }
 
@@ -520,6 +675,13 @@ void TimelineWidget::addSignalLane(const QString& name)
     lane.iSignalName = name.toStdString();
     lane.bitLength = bitLength;
     lane.watcher = new QFutureWatcher<void>(this);
+    if (ui->btnAutoFit->isChecked()) {
+        // If autofit is on, this newly added lane will cause a recalculation in updateLanesLayout
+        // We set a default height first.
+        lane.height = 40;
+    } else {
+        lane.height = 40;
+    }
 
     auto* w = lane.watcher;
     connect(lane.watcher, &QFutureWatcher<void>::finished, this, [this, w]() {
@@ -533,7 +695,7 @@ void TimelineWidget::addSignalLane(const QString& name)
 
     startSignalJob(static_cast<int>(m_lanes.size()) - 1);
 
-    m_signalLanesWidget->setFixedHeight(static_cast<int>(m_lanes.size()) * 40);
+    updateLanesLayout();
 }
 
 void TimelineWidget::restoreSignals(const QStringList& names)

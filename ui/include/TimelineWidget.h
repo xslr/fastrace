@@ -51,11 +51,13 @@ public:
 
     // Called by SignalLanesWidget::paintEvent
     void paintLanesWidget(QPainter& p, QRect rect);
+    void paintTimeAxisWidget(QPainter& p, QRect rect);
 
     // Called by SignalLanesWidget for interaction
     void handleLanesMouseMove(QPoint pos);
     void handleLanesLeave();
     void handleLanesMousePress(QPoint pos);
+    void handleLanesMouseRelease(QPoint pos);
     void handleLanesWheel(QWheelEvent* event);
 
     // ── Test accessors (const, zero-overhead) ────────────────────────────────
@@ -81,9 +83,11 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private slots:
     void onBtnAddSignalClicked();
+    void onAutoFitToggled(bool checked);
     void onSignalJobFinished(int laneIndex);
     void onZoomDebounceTimeout();
 
@@ -98,6 +102,7 @@ private:
         uint32_t bitLength = 0;
         uint64_t maxRaw { 0 };
         uint64_t minRaw { 0 };
+        int height = 40;
     };
 
     QStringList currentSignalNames() const;
@@ -112,13 +117,20 @@ private:
     // zoom window is set.
     std::pair<uint64_t, uint64_t> effectiveWindow() const;
 
+    void updateLanesLayout();
+
     Ui::TimelineWidget* ui;
     std::shared_ptr<fastrace::Analyzer> m_analyzer;
     std::vector<SignalLane> m_lanes;
     QWidget* m_signalLanesWidget = nullptr;
+    QWidget* m_timeAxisWidget = nullptr;
     QTimer* m_repaintTimer = nullptr;
     QTimer* m_zoomDebounceTimer = nullptr;
     int m_hoveredLaneIndex = -1;
+
+    int m_dragResizeLaneIndex = -1;
+    int m_dragResizeStartY = 0;
+    int m_dragResizeStartHeight = 0;
 
     // Visible time window (0/0 = full trace)
     uint64_t m_visibleStartUs = 0;
