@@ -65,8 +65,8 @@ jobs:
       with:
         name: cpp_parser-${{ matrix.os }}-${{ matrix.c_compiler }}
         path: |
-          ${{ steps.strings.outputs.build-output-dir }}/cpp/cpp_parser.exe
+          ${{ steps.strings.outputs.build-output-dir }}/cpp/Release/cpp_parser.exe
           ${{ steps.strings.outputs.build-output-dir }}/${{ matrix.build_type }}/cpp/cpp_parser.exe
-          ${{ steps.strings.outputs.build-output-dir }}/ui/fastrace_ui.exe
+          ${{ steps.strings.outputs.build-output-dir }}/ui/Release/fastrace_ui.exe
           ${{ steps.strings.outputs.build-output-dir }}/${{ matrix.build_type }}/ui/fastrace_ui.exe
         if-no-files-found: warn
