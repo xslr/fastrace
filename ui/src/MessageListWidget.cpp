@@ -33,14 +33,6 @@ MessageListWidget::~MessageListWidget() { delete ui; }
 
 void MessageListWidget::attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer) { m_model->setAnalyzer(analyzer); }
 
-void MessageListWidget::populateFrom(const std::vector<fastrace::TraceMessage>& messages)
-{
-    // Legacy method. No longer used directly for UI population,
-    // as attachAnalyzer does it lazy-loaded.
-    // Kept here if still needed by some other parts, but we can leave it empty
-    // or log a warning since we use MessageTableModel now.
-}
-
 void MessageListWidget::clearTable() { m_model->clear(); }
 
 void MessageListWidget::onSelectionChanged()
