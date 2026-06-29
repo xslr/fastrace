@@ -71,6 +71,15 @@ target_link_libraries(tst_timeline_overview_widget PRIVATE
     fastrace_analyzer
 )
 
+if(APPLE)
+    # Also strip AGL for tests
+    get_target_property(gui_libs Qt6::Gui INTERFACE_LINK_LIBRARIES)
+    if(gui_libs)
+        list(REMOVE_ITEM gui_libs "-framework AGL")
+        set_target_properties(Qt6::Gui PROPERTIES INTERFACE_LINK_LIBRARIES "${gui_libs}")
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # CTest registration
 # ---------------------------------------------------------------------------

@@ -94,6 +94,18 @@ target_link_libraries(fastrace_ui PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_
 # headers can find their necessary files.
 target_include_directories(fastrace_ui PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+if(APPLE)
+    # macOS Qt 6.8.3 from aqtinstall sometimes implicitly links to AGL which is removed in newer SDKs
+    # AGL is no longer present in macOS SDK 14/15. We can try to avoid linking it or link OpenGL.
+    # Actually, a known issue with Qt 6 on macos is it references AGL in some CMake configs.
+    # We can strip it out from the INTERFACE_LINK_LIBRARIES of Qt6::Gui.
+    get_target_property(gui_libs Qt6::Gui INTERFACE_LINK_LIBRARIES)
+    if(gui_libs)
+        list(REMOVE_ITEM gui_libs "-framework AGL")
+        set_target_properties(Qt6::Gui PROPERTIES INTERFACE_LINK_LIBRARIES "${gui_libs}")
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
