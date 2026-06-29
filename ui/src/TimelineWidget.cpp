@@ -546,6 +546,9 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
     float plotBottom = plotRect.bottom();
     const float laneH = (float)lane.maxRaw - (float)lane.minRaw;
 
+    QVector<QLineF> lines;
+    lines.reserve(numBins);
+
     for (int i = 0; i < numBins; ++i) {
         const auto& bin = lane.bins[i];
         if (!bin.hasData) {
@@ -565,10 +568,13 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
         float y1 = plotRect.bottom() - (plotH * (float)bin.maxRaw / laneH);
         float y2 = plotRect.bottom() - (plotH * (float)bin.minRaw / laneH);
 
-        // FIXME: Use drawLines to make things faster
-        p.setPen(dotColor);
-        p.drawLine(x1, y1, x2, y2);
+        lines.push_back(QLineF(x1, y1, x2, y2));
 #endif
+    }
+
+    if (!lines.isEmpty()) {
+        p.setPen(dotColor);
+        p.drawLines(lines);
     }
 }
 
