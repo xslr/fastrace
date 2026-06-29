@@ -21,12 +21,6 @@ public:
     ~MessageListWidget() override;
 
 public slots:
-    /// DEPRECATED: Use attachAnalyzer() and lazy loading instead.
-    /// Populate the table from a completed Analyzer::messages vector.
-    /// Called on the UI thread after async loading finishes.
-    void populateFrom(const std::vector<fastrace::TraceMessage>& messages);
-
-    /// Clear the table and show an empty state.
     /// Clear the table and show an empty state.
     void clearTable();
 
