@@ -71,6 +71,7 @@ target_link_libraries(tst_timeline_overview_widget PRIVATE
     fastrace_analyzer
 )
 
+
 # ---------------------------------------------------------------------------
 # CTest registration
 # ---------------------------------------------------------------------------

@@ -39,12 +39,16 @@ FetchContent_Declare(
   URL_HASH SHA3_256=81142986038e18f96c4a54e1a72562ae17e502a916f2a7701eff43388cbf1a40
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
-cmake_policy(SET CMP0169 OLD)
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
 FetchContent_GetProperties(sqlite_amalgamation)
 if(NOT sqlite_amalgamation_POPULATED)
   FetchContent_Populate(sqlite_amalgamation)
 endif()
-cmake_policy(SET CMP0169 NEW)
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 NEW)
+endif()
 
 add_library(sqlite3_amalg STATIC ${sqlite_amalgamation_SOURCE_DIR}/sqlite3.c)
 target_include_directories(sqlite3_amalg PUBLIC ${sqlite_amalgamation_SOURCE_DIR})

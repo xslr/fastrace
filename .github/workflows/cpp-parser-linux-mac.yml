@@ -46,7 +46,7 @@ jobs:
             c_compiler: cl
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v4
@@ -77,7 +77,11 @@ jobs:
       working-directory: ${{ steps.strings.outputs.build-output-dir }}
       # Execute tests defined by the CMake configuration. Note that --build-config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
-      run: ctest --build-config ${{ matrix.build_type }}
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          export QT_QPA_PLATFORM=offscreen
+        fi
+        ctest --build-config ${{ matrix.build_type }}
 
     - name: Upload binary
       uses: actions/upload-artifact@v7

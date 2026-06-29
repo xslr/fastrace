@@ -24,7 +24,7 @@ MessageTableModel::MessageTableModel(QObject* parent)
 
             // Run decoding in a background thread
             auto analyzer = m_analyzer;
-            QtConcurrent::run([this, analyzer, chunkIndex]() {
+            (void)QtConcurrent::run([this, analyzer, chunkIndex]() {
                 auto msgs = analyzer->decodeChunk(chunkIndex);
 
                 // Convert to QVector to safely pass across thread boundaries via

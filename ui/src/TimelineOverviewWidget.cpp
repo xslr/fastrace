@@ -169,8 +169,8 @@ QRect TimelineOverviewWidget::visibleWindowRect() const
     int xEnd
         = kLabelWidth + static_cast<int>(static_cast<uint64_t>(w) * (m_visibleEndUs - hist.traceStartUs) / durationUs);
 
-    xStart = std::max(kLabelWidth, std::min(xStart, kLabelWidth + w));
-    xEnd = std::max(kLabelWidth, std::min(xEnd, kLabelWidth + w));
+    xStart = (std::max)(kLabelWidth, (std::min)(xStart, kLabelWidth + w));
+    xEnd = (std::max)(kLabelWidth, (std::min)(xEnd, kLabelWidth + w));
 
     if (xEnd <= xStart) {
         return {};
@@ -234,7 +234,7 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
 
         uint32_t maxCount = 0;
         if (hist.bins[groupIdx].size() > 0) {
-            for (int x = 0; x < std::min<int>(w, hist.bins[groupIdx].size() * 5); ++x) {
+            for (int x = 0; x < (std::min<int>)(w, hist.bins[groupIdx].size() * 5); ++x) {
                 size_t binIndex = x / 5;
                 if (binIndex < hist.bins[groupIdx].size()) {
                     uint32_t count = hist.bins[groupIdx][binIndex];
