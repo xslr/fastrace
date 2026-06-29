@@ -383,12 +383,8 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
         return;
     }
 
-    // autofit bin values on y scale
-    uint64_t maxVal = lane.maxRaw;
-    if (maxVal == 0) {
-        maxVal = 1;
-    }
-
+    // TODO: When sufficiently zoomed in, render data points instead of lines indicating min-max of each bin.
+    // This requires Analyzer::buildSignalTimeSeries to return a list of sample points
     int numBins = static_cast<int>(lane.bins.size());
     float plotW = plotRect.width();
     float plotH = plotRect.height();
@@ -401,14 +397,23 @@ void TimelineWidget::paintLane(QPainter& p, const SignalLane& lane, QRect rect, 
             continue;
         }
 
+#if 0
         float x = float(plotRect.left()) + static_cast<float>(static_cast<int64_t>(i) * (float)plotW / (float)numBins);
-
-        float xx = x;
-        float hh = float(plotRect.height()) * (float(bin.maxRaw - bin.minRaw)) / laneH;
-        float yy = plotRect.top() + (plotH * (float)bin.minRaw / laneH);
-        float ww = float(plotRect.width()) / float(numBins);
+        float h = float(plotRect.height()) * (float(bin.maxRaw - bin.minRaw)) / laneH;
+        float y = plotRect.top() + (plotH * (float)bin.minRaw / laneH);
+        float w = float(plotRect.width()) / float(numBins);
         p.setPen(dotColor);
-        p.drawRect(xx, yy, ww, hh);
+        p.drawRect(x, y, w, h);
+#else
+        float x1 = float(plotRect.left()) + static_cast<float>(static_cast<int64_t>(i) * (float)plotW / (float)numBins);
+        float x2 = x1;
+        float y1 = plotRect.bottom() - (plotH * (float)bin.maxRaw / laneH);
+        float y2 = plotRect.bottom() - (plotH * (float)bin.minRaw / laneH);
+
+        // FIXME: Use drawLines to make things faster
+        p.setPen(dotColor);
+        p.drawLine(x1, y1, x2, y2);
+#endif
     }
 }
 
@@ -608,7 +613,9 @@ void TimelineWidget::onBtnAddSignalClicked()
 /// in fullTraceBins so applySubsampledView() can work without hitting disk.
 void TimelineWidget::startSignalJob(int laneIdx)
 {
-    const int laneWidth = 5;
+    // lane width allows grouping of samples on x axis. for now, we use 1px wide bins since it works well visually.
+    // TODO: this might be something to let the user decide.
+    const int laneWidth = 1;
     if (!m_analyzer || laneIdx < 0 || laneIdx >= static_cast<int>(m_lanes.size())) {
         return;
     }
