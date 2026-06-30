@@ -107,20 +107,25 @@ if(APPLE)
     # We can strip it out from the INTERFACE_LINK_LIBRARIES of Qt6::Gui.
     get_target_property(gui_libs Qt6::Gui INTERFACE_LINK_LIBRARIES)
     if(gui_libs)
-        string(REPLACE "-framework AGL" "" gui_libs_new "${gui_libs}")
+        string(REGEX REPLACE "-framework;AGL(;)?" "" gui_libs_new "${gui_libs}")
+        string(REGEX REPLACE "-framework AGL(;)?" "" gui_libs_new "${gui_libs_new}")
         set_target_properties(Qt6::Gui PROPERTIES INTERFACE_LINK_LIBRARIES "${gui_libs_new}")
     endif()
 
     # Also strip from global link directories or flags if they appear there
-    string(REPLACE "-framework AGL" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
-    string(REPLACE "-framework AGL" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+    string(REGEX REPLACE "-framework;AGL(;)?" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+    string(REGEX REPLACE "-framework AGL(;)?" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+
+    string(REGEX REPLACE "-framework;AGL(;)?" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+    string(REGEX REPLACE "-framework AGL(;)?" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
 
     # AGL is also in Qt6::OpenGL and Qt6::Widgets and others
     foreach(qt_comp Gui OpenGL Widgets Core Test Concurrent)
         if (TARGET Qt6::${qt_comp})
             get_target_property(comp_libs Qt6::${qt_comp} INTERFACE_LINK_LIBRARIES)
             if(comp_libs)
-                string(REPLACE "-framework AGL" "" comp_libs_new "${comp_libs}")
+                string(REGEX REPLACE "-framework;AGL(;)?" "" comp_libs_new "${comp_libs}")
+                string(REGEX REPLACE "-framework AGL(;)?" "" comp_libs_new "${comp_libs_new}")
                 set_target_properties(Qt6::${qt_comp} PROPERTIES INTERFACE_LINK_LIBRARIES "${comp_libs_new}")
             endif()
         endif()
