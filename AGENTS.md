@@ -47,13 +47,20 @@ Run these commands to start, test, and check your work:
     * `Cursor.h` – Cursor abstraction for iterating over trace messages.
     * `MappedFile.h` – Memory-mapped file I/O helper.
     * `NetTypes.h` – Ethernet / network message type definitions.
+    * `Detection.h` – Anomaly detection structs (Severity, Detection, ByteRange).
+    * `Detector.h` – Base class for protocol-specific anomaly detectors.
+    * `DetectionEngine.h` – Orchestrator for running detectors in parallel.
+    * `ProtocolMessage.h` – Unified representation of nested network messages for detectors.
+    * `ProtocolParser.h` – TCP/IP reassembly and header extraction.
     * `RecentFiles.h` – Persistent recent-file list (shared with UI).
     * `SignalDecoder.h` – Signal decoding from raw CAN/Ethernet frames.
     * `TraceMessage.h` – Unified trace message type used throughout the backend.
     * `WorkQueue.h` – Thread-safe work queue for background processing.
   * `/cpp/src/`: Backend implementation files
-    * `Analyzer.cpp`, `ArxmlParser.cpp`, `MappedFile.cpp`, `RecentFiles.cpp`, `SignalDecoder.cpp`, `WorkQueue.cpp`
+    * `Analyzer.cpp`, `ArxmlParser.cpp`, `MappedFile.cpp`, `RecentFiles.cpp`, `SignalDecoder.cpp`, `WorkQueue.cpp`, `DetectionEngine.cpp`, `ProtocolParser.cpp`
     * `main.cpp` – CLI entry point (`cpp_parser` binary).
+  * `/cpp/include/detectors/` & `/cpp/detectors/`: Protocol-specific anomaly detector implementations.
+    * `PduDetector.h` / `PduDetector.cpp`, `SomeIpSdDetector.h` / `SomeIpSdDetector.cpp`, `DoipDetector.h` / `DoipDetector.cpp`
 * `/cpp/doc`: Documentation specific to backend architecture and algorithms.
 * `/ui`: Qt6 Widgets-based frontend application (`fastrace_ui`). Connects to the backend `Analyzer`.
   * `/ui/include/`: UI widget headers
@@ -64,6 +71,7 @@ Run these commands to start, test, and check your work:
     * `MessageDetailsWidget.h` – Detailed view of a single message.
     * `TimelineWidget.h` / `TimelineOverviewWidget.h` – Timeline and mini-map widgets.
     * `DetectionsWidget.h` – Widget for displaying detected anomalies.
+    * `DetectionTableModel.h` / `DetectionFilterProxyModel.h` – Models for detection table.
     * `NotebookView.h` / `NotebookBlockWidget.h` – Notebook / script analysis view.
     * `ScriptEditorWidget.h` – Embedded script editor.
     * `AnalyzerPreviewWidget.h` – Preview widget for analyzer output.

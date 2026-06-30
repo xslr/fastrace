@@ -47,6 +47,12 @@ add_executable(fastrace_ui
     src/DetectionsWidget.cpp
     include/DetectionsWidget.h
 
+    # ── Detection Models ──────────────────────────────────────────────────────
+    src/DetectionTableModel.cpp
+    include/DetectionTableModel.h
+    src/DetectionFilterProxyModel.cpp
+    include/DetectionFilterProxyModel.h
+
     # ── Notebook-exclusive widgets ────────────────────────────────────────────
     src/ScriptEditorWidget.cpp
     include/ScriptEditorWidget.h

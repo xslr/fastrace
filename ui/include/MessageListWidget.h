@@ -25,6 +25,7 @@ public slots:
     void clearTable();
 
     void attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer);
+    void scrollToMessage(size_t index);
 
 signals:
     void messageSelected(const fastrace::TraceMessage& msg);

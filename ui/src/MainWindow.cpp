@@ -13,6 +13,7 @@
 #include <QtConcurrent/QtConcurrent>
 
 #include "Analyzer.h"
+#include "DetectionEngine.h"
 #include "DetectionsWidget.h"
 #include "MessageDetailsWidget.h"
 #include "MessageListWidget.h"
@@ -22,6 +23,9 @@
 #include "TimelineOverviewWidget.h"
 #include "TimelineWidget.h"
 #include "TopBarWidget.h"
+#include "detectors/DoipDetector.h"
+#include "detectors/PduDetector.h"
+#include "detectors/SomeIpSdDetector.h"
 
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
@@ -135,10 +139,29 @@ MainWindow::MainWindow(QWidget* parent)
     m_analyzer = std::make_shared<fastrace::Analyzer>();
     m_timeline->attachAnalyzer(m_analyzer);
 
+    // ── Detection: future watcher + poll timer ───────────────────────────────
+    m_detectionWatcher = new QFutureWatcher<void>(this);
+    connect(m_detectionWatcher, &QFutureWatcher<void>::finished, this, &MainWindow::onDetectionFinished);
+
+    m_detectionPollTimer = new QTimer(this);
+    m_detectionPollTimer->setInterval(100);
+    connect(m_detectionPollTimer, &QTimer::timeout, this, &MainWindow::onPollDetectionProgress);
+
+    m_continuousDetectionTimer = new QTimer(this);
+    m_continuousDetectionTimer->setInterval(1000);
+    connect(m_continuousDetectionTimer, &QTimer::timeout, this, &MainWindow::onContinuousDetectionTimer);
+
     // ── Signal connections ────────────────────────────────────────────────────
     connect(m_topBar, &TopBarWidget::modeChanged, this, &MainWindow::onModeChanged);
     connect(m_topBar, &TopBarWidget::traceFileChanged, this, &MainWindow::onTraceFileChanged);
     connect(m_topBar, &TopBarWidget::databaseSelectionChanged, this, &MainWindow::onDatabaseSelectionChanged);
+    connect(m_topBar, &TopBarWidget::runDetectorsRequested, this, &MainWindow::runDetectors);
+    connect(m_topBar, &TopBarWidget::cancelDetectionRequested, this, &MainWindow::cancelDetectors);
+    connect(m_topBar, &TopBarWidget::continuousDetectionToggled, this, &MainWindow::onContinuousDetectionToggled);
+
+    connect(m_detections, &DetectionsWidget::detectionSelected, m_overviewView->messageList(),
+        &MessageListWidget::scrollToMessage);
+
     connect(m_timeline, &TimelineWidget::signalsChanged, this,
         [](const QStringList& names) { QSettings().setValue("timeline/selectedSignals", names); });
 
@@ -217,6 +240,7 @@ void MainWindow::startLoad(const QString& path)
     // Clear both message lists immediately so stale data isn't shown.
     m_overviewView->messageList()->clearTable();
     m_notebookView->messageList()->clearTable();
+    m_detections->setDetections({});
 
     resetSpeedState();
 
@@ -438,5 +462,113 @@ void MainWindow::updateTimeBoundsLabel()
     } else {
         m_timeBoundsLabel->setText(
             QString("Start: 00:00:00.000000     End: %1").arg(formatTs(hist.traceEndUs - hist.traceStartUs)));
+    }
+}
+
+void MainWindow::runDetectors()
+{
+    if (!m_analyzer || m_analyzer->totalMessages() == 0) {
+        return;
+    }
+
+    m_lastProcessedChunk = 0;
+    m_detections->setDetections({});
+    m_detectionCancelled.store(false, std::memory_order_relaxed);
+    m_detectionChunksProcessed.store(0, std::memory_order_relaxed);
+
+    m_detectionEngine = std::make_shared<DetectionEngine>();
+    const fastrace::ArDatabase* db = nullptr;
+    if (!m_currentDbPath.isEmpty()) {
+        db = &m_analyzer->arDatabase();
+    }
+
+    m_detectionEngine->addDetector(std::make_unique<PduDetector>(db));
+    m_detectionEngine->addDetector(std::make_unique<SomeIpSdDetector>());
+    m_detectionEngine->addDetector(std::make_unique<DoipDetector>(db));
+
+    m_topBar->setDetectionRunning(true);
+    m_detectionPollTimer->start();
+
+    auto future = QtConcurrent::run([engine = m_detectionEngine, analyzer = m_analyzer, db, this]() {
+        engine->run(analyzer.get(), db, m_detectionCancelled, m_detectionChunksProcessed);
+    });
+
+    m_detectionWatcher->setFuture(future);
+}
+
+void MainWindow::cancelDetectors()
+{
+    m_detectionCancelled.store(true, std::memory_order_relaxed);
+    m_detectionPollTimer->stop();
+    m_topBar->setDetectionRunning(false);
+}
+
+void MainWindow::onDetectionFinished()
+{
+    m_detectionPollTimer->stop();
+    m_topBar->setDetectionRunning(false);
+
+    if (m_analyzer && !m_detectionCancelled.load(std::memory_order_relaxed)) {
+        m_lastProcessedChunk = m_analyzer->getChunkIndex().size();
+    }
+
+    if (m_detectionCancelled.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    m_detections->setDetections(m_detectionEngine->getResults());
+}
+
+void MainWindow::onPollDetectionProgress()
+{
+    if (!m_detectionEngine) {
+        return;
+    }
+    size_t processed = m_detectionChunksProcessed.load(std::memory_order_relaxed);
+    size_t total = m_detectionEngine->chunkCount();
+    if (total == 0 && m_analyzer) {
+        total = m_analyzer->getChunkIndex().size();
+    }
+
+    m_topBar->setDetectionProgress(processed, total);
+}
+
+void MainWindow::onContinuousDetectionToggled(bool enabled)
+{
+    if (enabled && m_analyzer && m_analyzer->totalMessages() > 0) {
+        if (!m_detectionEngine) {
+            runDetectors();
+        }
+        m_continuousDetectionTimer->start();
+    } else {
+        m_continuousDetectionTimer->stop();
+    }
+}
+
+void MainWindow::onContinuousDetectionTimer()
+{
+    if (!m_analyzer || !m_detectionEngine) {
+        return;
+    }
+    if (m_detectionWatcher->isRunning()) {
+        return; // Still processing
+    }
+
+    size_t currentChunks = m_analyzer->getChunkIndex().size();
+    if (currentChunks > m_lastProcessedChunk) {
+        m_detectionCancelled.store(false, std::memory_order_relaxed);
+        m_detectionChunksProcessed.store(0, std::memory_order_relaxed);
+
+        m_topBar->setDetectionRunning(true);
+        m_detectionPollTimer->start();
+
+        const fastrace::ArDatabase* db = m_currentDbPath.isEmpty() ? nullptr : &m_analyzer->arDatabase();
+
+        auto future = QtConcurrent::run(
+            [engine = m_detectionEngine, analyzer = m_analyzer, db, startChunk = m_lastProcessedChunk, this]() {
+                engine->run(analyzer.get(), db, m_detectionCancelled, m_detectionChunksProcessed, startChunk);
+            });
+
+        m_detectionWatcher->setFuture(future);
     }
 }

@@ -3,9 +3,11 @@
 #include <QFutureWatcher>
 #include <QMainWindow>
 #include <array>
+#include <atomic>
 #include <memory>
 
 #include "TopBarWidget.h" // for ViewMode
+class DetectionEngine;
 
 namespace fastrace {
 class Analyzer;
@@ -42,6 +44,14 @@ private slots:
     void onDatabaseSelectionChanged(const QString& path);
     void onDbLoadFinished();
     void onPollDbProgress();
+
+    void runDetectors();
+    void cancelDetectors();
+    void onDetectionFinished();
+    void onPollDetectionProgress();
+
+    void onContinuousDetectionToggled(bool enabled);
+    void onContinuousDetectionTimer();
 
 private:
     void startLoad(const QString& path);
@@ -85,6 +95,15 @@ private:
     QFutureWatcher<void>* m_dbWatcher = nullptr;
     QTimer* m_dbPollTimer = nullptr;
     QString m_currentDbPath;
+
+    // ── Detection async loading ────────────────────────────────────────────────
+    std::shared_ptr<DetectionEngine> m_detectionEngine;
+    QFutureWatcher<void>* m_detectionWatcher = nullptr;
+    QTimer* m_detectionPollTimer = nullptr;
+    QTimer* m_continuousDetectionTimer = nullptr;
+    std::atomic<bool> m_detectionCancelled { false };
+    std::atomic<size_t> m_detectionChunksProcessed { 0 };
+    size_t m_lastProcessedChunk = 0;
 
     // ── Msg/s rolling average (N=5 samples at 100 ms each) ───────────────────
     static constexpr int kSpeedSamples = 5;
