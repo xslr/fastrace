@@ -165,7 +165,7 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&w));
 
         const auto children = w.findChildren<QCheckBox*>();
-        QVERIFY2(children.size() >= 2, "Expected at least two QCheckBox children (CAN + Ethernet)");
+        QVERIFY2(children.size() >= 4, "Expected at least four QCheckBox children");
 
         QCheckBox* chk = children.at(1); // Ethernet is the second checkbox
         chk->setChecked(false);
