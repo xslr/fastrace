@@ -22,6 +22,7 @@
  */
 #pragma once
 
+#include "Detection.h"
 #include <QFutureWatcher>
 #include <QTimer>
 #include <QWidget>
@@ -42,6 +43,7 @@ public:
     explicit TimelineOverviewWidget(QWidget* parent = nullptr);
     ~TimelineOverviewWidget() override = default;
 
+    void setDetections(const std::vector<Detection>& detections);
     void attachAnalyzer(std::shared_ptr<fastrace::Analyzer> analyzer);
 
     void setVisibleWindow(uint64_t startUs, uint64_t endUs);
@@ -89,6 +91,9 @@ private:
 
     QCheckBox* m_chkCan = nullptr;
     QCheckBox* m_chkEthernet = nullptr;
+    QCheckBox* m_chkAnomalies = nullptr;
+    QCheckBox* m_chkInfoAnomalies = nullptr;
+    std::vector<Detection> m_detections;
 
     // UI state
     uint64_t m_visibleStartUs = 0;

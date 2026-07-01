@@ -71,10 +71,18 @@ TimelineOverviewWidget::TimelineOverviewWidget(QWidget* parent)
     m_chkEthernet = new QCheckBox("Ethernet", this);
     m_chkEthernet->setChecked(true);
 
+    m_chkAnomalies = new QCheckBox("Anomalies (Warn/Err)", this);
+    m_chkAnomalies->setChecked(true);
+    m_chkInfoAnomalies = new QCheckBox("Anomalies (Info)", this);
+    m_chkInfoAnomalies->setChecked(false);
+
     topLayout->addWidget(lblHeader);
     topLayout->addSpacing(16);
     topLayout->addWidget(m_chkCan);
     topLayout->addWidget(m_chkEthernet);
+    topLayout->addWidget(m_chkAnomalies);
+    topLayout->addWidget(m_chkInfoAnomalies);
+
     topLayout->addStretch();
 
     auto* mainLayout = new QVBoxLayout(this);
@@ -85,6 +93,8 @@ TimelineOverviewWidget::TimelineOverviewWidget(QWidget* parent)
 
     connect(m_chkCan, &QCheckBox::toggled, this, &TimelineOverviewWidget::onLaneToggled);
     connect(m_chkEthernet, &QCheckBox::toggled, this, &TimelineOverviewWidget::onLaneToggled);
+    connect(m_chkAnomalies, &QCheckBox::toggled, this, &TimelineOverviewWidget::onLaneToggled);
+    connect(m_chkInfoAnomalies, &QCheckBox::toggled, this, &TimelineOverviewWidget::onLaneToggled);
 
     m_debounceTimer.setSingleShot(true);
     m_debounceTimer.setInterval(200);
@@ -267,6 +277,45 @@ void TimelineOverviewWidget::paintEvent(QPaintEvent* event)
     if (m_chkEthernet->isChecked()) {
         drawLane(static_cast<size_t>(fastrace::ProtocolGroup::Ethernet), "ETH", 0.45f); // Teal
     }
+    // Draw anomalies
+    if (m_chkAnomalies->isChecked() || m_chkInfoAnomalies->isChecked()) {
+        painter.setPen(Qt::black);
+        painter.drawText(
+            QRect(0, yOffset, kLabelWidth - 5, laneHeight), Qt::AlignRight | Qt::AlignVCenter, "Anomalies");
+
+        for (const auto& d : m_detections) {
+            bool isInfo = (d.severity == Severity::Info);
+            if (isInfo && !m_chkInfoAnomalies->isChecked()) {
+                continue;
+            }
+            if (!isInfo && !m_chkAnomalies->isChecked()) {
+                continue;
+            }
+
+            int x = timestampToX(d.timestampUs);
+            if (x >= kLabelWidth && x < kLabelWidth + w) {
+                QColor color;
+                switch (d.severity) {
+                case Severity::Info:
+                    color = QColor(100, 100, 255, 180);
+                    break;
+                case Severity::Warning:
+                    color = QColor(255, 165, 0, 180);
+                    break; // Orange
+                case Severity::Error:
+                    color = QColor(255, 0, 0, 180);
+                    break; // Red
+                }
+
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(color);
+
+                // Draw a small diamond or circle
+                painter.drawEllipse(QPoint(x, yOffset + laneHeight / 2), 3, 3);
+            }
+        }
+        yOffset += laneHeight + 1;
+    }
 
     // Draw visible window overlay rectangle
     const QRect winRect = visibleWindowRect();
@@ -318,9 +367,65 @@ void TimelineOverviewWidget::mousePressEvent(QMouseEvent* event)
     }
 
     const int x = event->pos().x() - kLabelWidth;
+    const int y = event->pos().y();
     if (x >= 0 && x < w) {
+        // Check if we clicked on an anomaly
+        if (m_chkAnomalies->isChecked() || m_chkInfoAnomalies->isChecked()) {
+            int yOffset = kYOffset + 15;
+            int laneHeight = 18;
+            if (m_chkCan->isChecked()) {
+                yOffset += laneHeight + 1;
+            }
+            if (m_chkEthernet->isChecked()) {
+                yOffset += laneHeight + 1;
+            }
+
+            if (y >= yOffset && y <= yOffset + laneHeight) {
+                // Find clicked anomaly
+                int bestDist = 10;
+                const Detection* bestD = nullptr;
+                for (const auto& d : m_detections) {
+                    bool isInfo = (d.severity == Severity::Info);
+                    if (isInfo && !m_chkInfoAnomalies->isChecked()) {
+                        continue;
+                    }
+                    if (!isInfo && !m_chkAnomalies->isChecked()) {
+                        continue;
+                    }
+
+                    int dX = timestampToX(d.timestampUs) - kLabelWidth;
+                    int dist = std::abs(dX - x);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestD = &d;
+                    }
+                }
+
+                if (bestD) {
+                    uint64_t winWidth = m_visibleEndUs - m_visibleStartUs;
+                    if (winWidth > 0 && m_analyzer) {
+                        const auto& hist = m_analyzer->histogram();
+                        uint64_t halfWin = winWidth / 2;
+                        uint64_t newStart = (bestD->timestampUs > hist.traceStartUs + halfWin)
+                            ? bestD->timestampUs - halfWin
+                            : hist.traceStartUs;
+                        uint64_t newEnd = newStart + winWidth;
+                        if (newEnd > hist.traceEndUs) {
+                            newEnd = hist.traceEndUs;
+                            newStart = (newEnd > winWidth + hist.traceStartUs) ? newEnd - winWidth : hist.traceStartUs;
+                        }
+                        emit windowPanRequested(newStart, newEnd);
+                    }
+
+                    emit navigateRequested(bestD->timestampUs);
+                    return;
+                }
+            }
+        }
+
         const auto& hist = m_analyzer->histogram();
         uint64_t durationUs = hist.traceEndUs - hist.traceStartUs;
+
         uint64_t ts = hist.traceStartUs + (durationUs * x) / w;
         emit navigateRequested(ts);
     }
@@ -379,7 +484,62 @@ void TimelineOverviewWidget::mouseMoveEvent(QMouseEvent* event)
         int yOffset = kYOffset;
         int laneHeight = 18;
 
+        // Check if we hover over anomaly
+        if (m_chkAnomalies->isChecked() || m_chkInfoAnomalies->isChecked()) {
+            int anomYOffset = yOffset + 15;
+            if (m_chkCan->isChecked()) {
+                anomYOffset += laneHeight + 1;
+            }
+            if (m_chkEthernet->isChecked()) {
+                anomYOffset += laneHeight + 1;
+            }
+
+            if (y >= anomYOffset && y <= anomYOffset + laneHeight) {
+                // Find hovered anomaly
+                int bestDist = 10;
+                const Detection* bestD = nullptr;
+                for (const auto& d : m_detections) {
+                    bool isInfo = (d.severity == Severity::Info);
+                    if (isInfo && !m_chkInfoAnomalies->isChecked()) {
+                        continue;
+                    }
+                    if (!isInfo && !m_chkAnomalies->isChecked()) {
+                        continue;
+                    }
+
+                    int dX = timestampToX(d.timestampUs) - kLabelWidth;
+                    int dist = std::abs(dX - x);
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestD = &d;
+                    }
+                }
+                if (bestD) {
+                    QString severityStr;
+                    switch (bestD->severity) {
+                    case Severity::Info:
+                        severityStr = "Info";
+                        break;
+                    case Severity::Warning:
+                        severityStr = "Warning";
+                        break;
+                    case Severity::Error:
+                        severityStr = "Error";
+                        break;
+                    }
+                    QToolTip::showText(event->globalPosition().toPoint(),
+                        QString("[%1] %2: %3")
+                            .arg(severityStr)
+                            .arg(QString::fromStdString(bestD->detectorName))
+                            .arg(QString::fromStdString(bestD->message)),
+                        this);
+                    return;
+                }
+            }
+        }
+
         QString laneName;
+
         uint32_t count = 0;
         const auto& hist = m_analyzer->histogram();
 
@@ -461,5 +621,11 @@ void TimelineOverviewWidget::restartHistogramJob()
 
     m_histogramWatcher.setFuture(future);
     m_repaintTimer.start();
+    update();
+}
+
+void TimelineOverviewWidget::setDetections(const std::vector<Detection>& detections)
+{
+    m_detections = detections;
     update();
 }
