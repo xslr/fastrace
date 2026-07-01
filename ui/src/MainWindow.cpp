@@ -241,6 +241,7 @@ void MainWindow::startLoad(const QString& path)
     m_overviewView->messageList()->clearTable();
     m_notebookView->messageList()->clearTable();
     m_detections->setDetections({});
+    m_timelineOverview->setDetections({});
 
     resetSpeedState();
 
@@ -473,6 +474,7 @@ void MainWindow::runDetectors()
 
     m_lastProcessedChunk = 0;
     m_detections->setDetections({});
+    m_timelineOverview->setDetections({});
     m_detectionCancelled.store(false, std::memory_order_relaxed);
     m_detectionChunksProcessed.store(0, std::memory_order_relaxed);
 
@@ -517,6 +519,7 @@ void MainWindow::onDetectionFinished()
     }
 
     m_detections->setDetections(m_detectionEngine->getResults());
+    m_timelineOverview->setDetections(m_detectionEngine->getResults());
 }
 
 void MainWindow::onPollDetectionProgress()
