@@ -71,6 +71,15 @@ target_link_libraries(tst_timeline_overview_widget PRIVATE
     fastrace_analyzer
 )
 
+if(APPLE)
+    # AGL is also in Qt6::Test
+    get_target_property(test_libs Qt6::Test INTERFACE_LINK_LIBRARIES)
+    if(test_libs)
+        string(REPLACE "-framework AGL" "" test_libs_new "${test_libs}")
+        string(REPLACE "-framework;AGL" "" test_libs_new "${test_libs_new}")
+        set_target_properties(Qt6::Test PROPERTIES INTERFACE_LINK_LIBRARIES "${test_libs_new}")
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # CTest registration
