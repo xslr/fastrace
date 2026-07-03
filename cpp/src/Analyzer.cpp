@@ -41,6 +41,20 @@
 
 namespace fastrace {
 
+static std::string formatHex(const uint8_t* data, size_t len)
+{
+    constexpr char hex_chars[] = "0123456789abcdef";
+    std::string hex;
+    hex.resize(len * 3);
+    for (size_t i = 0; i < len; ++i) {
+        const uint8_t byte = data[i];
+        hex[i * 3] = hex_chars[byte >> 4];
+        hex[i * 3 + 1] = hex_chars[byte & 0xF];
+        hex[i * 3 + 2] = ' ';
+    }
+    return hex;
+}
+
 static ProtocolGroup protocolGroupOf(uint32_t objectType)
 {
     switch (objectType) {
@@ -438,11 +452,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const bool ext = (rawId >> 31) & 1;
                 const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
                 const uint8_t dlen = (std::min)(msg.dlc, static_cast<uint8_t>(8));
-                std::string hex;
-                hex.reserve(dlen * 3);
-                for (uint8_t i = 0; i < dlen; ++i) {
-                    hex += std::format("{:02x} ", msg.data[i]);
-                }
+                std::string hex = formatHex(msg.data, dlen);
                 spdlog::debug(
                     "CAN ch={} id=0x{:x}{} dlc={} data: {}", msg.channel, arbId, ext ? "x" : "", msg.dlc, hex);
             }
@@ -484,11 +494,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
             ++counts[base.objectType];
             if (self->dumpObjContents) {
                 const size_t dumpLen = (std::min)(frameLen, static_cast<size_t>(20));
-                std::string hex;
-                hex.reserve(dumpLen * 3);
-                for (size_t i = 0; i < dumpLen; ++i) {
-                    hex += std::format("{:02x} ", static_cast<uint8_t>(frameData[i]));
-                }
+                std::string hex = formatHex(reinterpret_cast<const uint8_t*>(frameData), dumpLen);
                 spdlog::debug(
                     "ETH ch={} dir={} paylen={} frame: {}", eth.channel, eth.direction, eth.payloadLength, hex);
                 parseTransport(frameData, frameLen);
@@ -556,11 +562,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const bool ext = (rawId >> 31) & 1;
                 const uint32_t arbId = ext ? (rawId & 0x1FFFFFFFu) : (rawId & 0x7FFu);
                 const size_t dlen = (std::min)(static_cast<size_t>(msg.validDataBytes), dataAvail);
-                std::string hex;
-                hex.reserve(dlen * 3);
-                for (size_t i = 0; i < dlen; ++i) {
-                    hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[i]));
-                }
+                std::string hex = formatHex(reinterpret_cast<const uint8_t*>(dataPtr), dlen);
                 spdlog::info("CAN_FD ch={} id=0x{:x}{} dlc={} len={} data: {}", msg.channel, arbId, ext ? "x" : "",
                     msg.dlc, msg.validDataBytes, hex);
             }
@@ -610,11 +612,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
                 const bool edl = (msg.flags & 0x2000u) != 0;
                 const size_t skip = msg.extDataOffset; // reserved bytes before actual data
                 const size_t dlen = (std::min)(static_cast<size_t>(msg.validDataBytes), dataAvail);
-                std::string hex;
-                hex.reserve(dlen * 3);
-                for (size_t i = 0; i < dlen; ++i) {
-                    hex += std::format("{:02x} ", static_cast<uint8_t>(dataPtr[i]));
-                }
+                std::string hex = formatHex(reinterpret_cast<const uint8_t*>(dataPtr), dlen);
                 spdlog::info("CAN_FD64 ch={} id=0x{:x}{} dlc={} len={} brs={} edl={} data: {}", +msg.channel, arbId,
                     ext ? "x" : "", msg.dlc, msg.validDataBytes, brs, edl, hex);
 
@@ -661,11 +659,7 @@ static void processInnerObjects(Analyzer* self, const char* data, size_t dataLen
             ++counts[base.objectType];
             if (self->dumpObjContents) {
                 const size_t dumpLen = (std::min)(frameLen, size_t { 20 });
-                std::string hex;
-                hex.reserve(dumpLen * 3);
-                for (size_t i = 0; i < dumpLen; ++i) {
-                    hex += std::format("{:02x} ", static_cast<uint8_t>(frameData[i]));
-                }
+                std::string hex = formatHex(reinterpret_cast<const uint8_t*>(frameData), dumpLen);
                 spdlog::debug("ETH_EX ch={} dir={} paylen={} frame: {}", eth.channel, eth.dir, eth.payloadLen, hex);
                 parseTransport(frameData, frameLen);
             }
