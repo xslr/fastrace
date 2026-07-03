@@ -108,9 +108,7 @@ if(APPLE)
 
     # Also strip from global link directories or flags if they appear there
     string(REPLACE "-framework AGL" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
-    string(REPLACE "-framework;AGL" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
     string(REPLACE "-framework AGL" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
-    string(REPLACE "-framework;AGL" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
 
     # AGL is also in Qt6::OpenGL and Qt6::Widgets and others
     foreach(qt_comp Gui OpenGL Widgets Core Test Concurrent)
