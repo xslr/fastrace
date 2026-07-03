@@ -18,3 +18,7 @@ out/
 *.log
 .env*
 .qtcreator
+test.arxml
+test_perf.cpp
+generate_arxml.py
+test_perf

@@ -14,6 +14,23 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+if(APPLE)
+    # Strip AGL framework from Qt6 targets for tests as well
+    foreach(qt_comp Gui OpenGL Widgets Core Test Concurrent)
+        if (TARGET Qt6::${qt_comp})
+            get_target_property(comp_libs Qt6::${qt_comp} INTERFACE_LINK_LIBRARIES)
+            if(comp_libs)
+                string(REPLACE "-framework AGL" "" comp_libs_new "${comp_libs}")
+                string(REPLACE "-framework;AGL" "" comp_libs_new "${comp_libs_new}")
+                set_target_properties(Qt6::${qt_comp} PROPERTIES INTERFACE_LINK_LIBRARIES "${comp_libs_new}")
+            endif()
+        endif()
+    endforeach()
+
+    string(REPLACE "-framework AGL" "" CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS}")
+    string(REPLACE "-framework AGL" "" CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS}")
+endif()
+
 # ---------------------------------------------------------------------------
 # Shared include / source roots (relative to this CMakeLists.txt)
 # ---------------------------------------------------------------------------
